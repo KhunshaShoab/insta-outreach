@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build:n8n": "node n8n/build.mjs",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test --test-reporter=dot tests/*.test.mjs",
     "check": "node scripts/lint.mjs && npm run build:n8n && npm test",
     "validate:config": "node scripts/validate-config.mjs",
     "report:daily": "node scripts/daily-report.mjs"

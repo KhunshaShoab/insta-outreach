@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OptiFlow Outreach Console</title>
+<!--
+  Single-file operator console. No build step, no dependencies.
+
+  It reads queues straight from the database views over PostgREST, and performs
+  every decision through the n8n approval API (workflow 7) so that approving,
+  rejecting and marking-as-sent all go through one audited path.
+
+  Nothing in this page can send an Instagram message. Sending is a human action
+  taken in Instagram itself; the "Mark as sent" button records that it happened.
+
+  Configure the endpoints once - they are stored in this browser only.
+-->
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #f0f2f5;
+    --border: #d9dee5;
+    --text: #17202a;
+    --muted: #5d6770;
+    --accent: #1f6feb;
+    --accent-soft: #e8f0fe;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --danger: #b42318;
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2b323d;
+      --text: #e6edf3; --muted: #9aa5b1; --accent: #4a8bf5; --accent-soft: #14233d;
+      --ok: #3fb950; --warn: #d29922; --danger: #f85149;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230; --border: #2b323d;
+    --text: #e6edf3; --muted: #9aa5b1; --accent: #4a8bf5; --accent-soft: #14233d;
+    --ok: #3fb950; --warn: #d29922; --danger: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5; background: var(--surface);
+    border-bottom: 1px solid var(--border); padding: 12px 16px;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  }
+  h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .grow { flex: 1; }
+  main { max-width: 1120px; margin: 0 auto; padding: 16px; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  button, .btn {
+    font: inherit; cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); border-radius: 8px; padding: 7px 12px; transition: background .12s, border-color .12s;
+  }
+  button:hover { background: var(--surface-2); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.07); }
+  button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+  button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 14px;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+  .col { flex: 1 1 320px; min-width: 0; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+    border: 1px solid var(--border); background: var(--surface-2); white-space: nowrap;
+  }
+  .pill.high { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+  .pill.medium { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); }
+  .pill.flag { color: var(--warn); }
+  textarea {
+    width: 100%; min-height: 120px; font: inherit; padding: 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text); resize: vertical;
+  }
+  .count { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .count.over { color: var(--danger); font-weight: 600; }
+  ul { margin: 6px 0; padding-left: 18px; }
+  li { margin: 2px 0; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .empty { text-align: center; padding: 48px 16px; color: var(--muted); }
+  .toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 16px; box-shadow: 0 6px 24px rgba(0,0,0,.18); z-index: 20; max-width: min(92vw, 560px);
+  }
+  .toast.error { border-color: var(--danger); color: var(--danger); }
+  input[type=text], input[type=password], select {
+    font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); width: 100%;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 2px; }
+  dialog {
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+    color: var(--text); max-width: 520px; width: 92vw; padding: 20px;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .msg { white-space: pre-wrap; background: var(--surface-2); padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .stat b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+  kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; }
+  @media (max-width: 640px) { main { padding: 12px 16px; } header { padding: 10px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>OptiFlow Outreach Console</h1>
+  <nav>
+    <button data-tab="approval" aria-pressed="true">Approval queue</button>
+    <button data-tab="send">Ready to send</button>
+    <button data-tab="conversations">Conversations</button>
+    <button data-tab="dashboard">Dashboard</button>
+  </nav>
+  <span class="grow"></span>
+  <span class="meta" id="operator-label"></span>
+  <button id="refresh" title="Refresh (r)">Refresh</button>
+  <button id="settings-open">Settings</button>
+</header>
+
+<main>
+  <section id="view"></section>
+</main>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2 style="margin-top:0;font-size:16px">Connection</h2>
+    <p class="meta">Stored in this browser only. The service-role key must never be pasted here - use the anon key and let row level security do its job.</p>
+    <label for="cfg-n8n">n8n base URL</label>
+    <input type="text" id="cfg-n8n" placeholder="https://n8n.example.com">
+    <label for="cfg-supabase">Supabase URL</label>
+    <input type="text" id="cfg-supabase" placeholder="https://project.supabase.co">
+    <label for="cfg-key">Supabase anon key</label>
+    <input type="password" id="cfg-key" placeholder="eyJ...">
+    <label for="cfg-operator">Your name or email (recorded on every decision)</label>
+    <input type="text" id="cfg-operator" placeholder="ops@optiflow.example">
+    <label for="cfg-theme">Theme</label>
+    <select id="cfg-theme">
+      <option value="auto">Match system</option>
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+      <button value="cancel">Cancel</button>
+      <button value="save" class="primary" id="settings-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+const STORE = 'optiflow.console.v1';
+const state = {
+  tab: 'approval',
+  config: loadConfig(),
+  data: { approval: [], send: [], conversations: [], dashboard: null },
+  busy: new Set()
+};
+
+function loadConfig() {
+  try {
+    return { n8n: '', supabase: '', key: '', operator: '', theme: 'auto', ...JSON.parse(localStorage.getItem(STORE) || '{}') };
+  } catch {
+    return { n8n: '', supabase: '', key: '', operator: '', theme: 'auto' };
+  }
+}
+function saveConfig() {
+  try { localStorage.setItem(STORE, JSON.stringify(state.config)); } catch { /* private mode - keep going */ }
+  applyTheme();
+}
+function applyTheme() {
+  const theme = state.config.theme || 'auto';
+  if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', theme);
+}
+
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const num = (value) => (value === null || value === undefined ? '-' : Number(value).toLocaleString());
+
+function toast(message, isError = false) {
+  document.querySelector('.toast')?.remove();
+  const el = document.createElement('div');
+  el.className = `toast${isError ? ' error' : ''}`;
+  el.textContent = message;
+  document.body.append(el);
+  setTimeout(() => el.remove(), isError ? 7000 : 3000);
+}
+
+async function db(path) {
+  const { supabase, key } = state.config;
+  if (!supabase || !key) throw new Error('Set the Supabase URL and anon key in Settings.');
+  const response = await fetch(`${supabase.replace(/\/+$/, '')}/rest/v1/${path}`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` }
+  });
+  if (!response.ok) throw new Error(`Read failed (HTTP ${response.status}): ${(await response.text()).slice(0, 200)}`);
+  return response.json();
+}
+
+async function rpc(fn, args) {
+  const { supabase, key } = state.config;
+  const response = await fetch(`${supabase.replace(/\/+$/, '')}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(args)
+  });
+  if (!response.ok) throw new Error(`${fn} failed (HTTP ${response.status}): ${(await response.text()).slice(0, 200)}`);
+  return response.json();
+}
+
+/** Every decision goes through the n8n approval API so it is audited in one place. */
+async function act(action, body) {
+  const { n8n, operator } = state.config;
+  if (!n8n) throw new Error('Set the n8n base URL in Settings.');
+  if (!operator) throw new Error('Set your name in Settings - decisions are recorded against it.');
+  const response = await fetch(`${n8n.replace(/\/+$/, '')}/webhook/optiflow/approval/${action}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-operator': operator },
+    body: JSON.stringify({ ...body, operator })
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`${action} failed (HTTP ${response.status}): ${text.slice(0, 200)}`);
+  try { return JSON.parse(text); } catch { return { ok: true }; }
+}
+
+async function withBusy(id, fn) {
+  if (state.busy.has(id)) return;
+  state.busy.add(id);
+  render();
+  try {
+    await fn();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    state.busy.delete(id);
+    render();
+  }
+}
+
+// --- loading -------------------------------------------------------------
+async function refresh() {
+  try {
+    if (state.tab === 'approval') {
+      state.data.approval = await db('v_approval_queue?select=*&limit=50');
+    } else if (state.tab === 'send') {
+      state.data.send = await db('v_send_queue?select=*&limit=100');
+    } else if (state.tab === 'conversations') {
+      state.data.conversations = await db('v_conversations_open?select=*&limit=50');
+    } else if (state.tab === 'dashboard') {
+      state.data.dashboard = await rpc('daily_report', { p_day: new Date().toISOString().slice(0, 10), p_campaign_id: null });
+    }
+  } catch (error) {
+    toast(error.message, true);
+  }
+  render();
+}
+
+// --- views ---------------------------------------------------------------
+function approvalCard(item) {
+  const variations = Array.isArray(item.variations) ? item.variations : [];
+  const observations = Array.isArray(item.specific_observations) ? item.specific_observations : [];
+  const pains = Array.isArray(item.potential_pain_points) ? item.potential_pain_points : [];
+  const flags = String(item.notes || '').startsWith('Review flags') ? item.notes : null;
+
+  return `
+  <article class="card" data-outreach="${esc(item.outreach_id)}">
+    <div class="row">
+      <div class="col">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <strong>${esc(item.business_name)}</strong>
+          <span class="pill ${esc(item.priority || '')}">ICP ${num(item.icp_score)} &middot; ${esc(item.icp_band || '')}</span>
+          ${item.kind !== 'initial' ? `<span class="pill">${esc(item.kind)}</span>` : ''}
+          ${flags ? `<span class="pill flag" title="${esc(flags)}">needs a look</span>` : ''}
+        </div>
+        <div class="meta">
+          ${item.instagram_handle ? `<a href="https://www.instagram.com/${esc(item.instagram_handle)}/" target="_blank" rel="noopener">@${esc(item.instagram_handle)}</a>` : 'no handle'}
+          &middot; ${esc(item.city || '')}${item.state ? ', ' + esc(item.state) : ''}
+          &middot; ${num(item.ig_followers)} followers
+          ${item.website ? ` &middot; <a href="${esc(item.website)}" target="_blank" rel="noopener">website</a>` : ''}
+        </div>
+        <div class="meta" style="margin-top:6px">
+          To: <strong>${esc(item.target_contact || 'the business account')}</strong>${item.target_role ? ` (${esc(item.target_role)})` : ''}
+          &middot; angle: ${esc(item.outreach_angle || 'n/a')}
+        </div>
+        ${item.target_reason ? `<div class="meta" style="margin-top:4px">${esc(item.target_reason)}</div>` : ''}
+        <details style="margin-top:8px">
+          <summary>Why this lead, and what to open with</summary>
+          ${item.business_summary ? `<p class="meta">${esc(item.business_summary)}</p>` : ''}
+          ${observations.length ? `<p class="meta" style="margin-bottom:2px">Observations the writer had:</p><ul class="meta">${observations.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : ''}
+          ${pains.length ? `<p class="meta" style="margin-bottom:2px">Pain points:</p><ul class="meta">${pains.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : ''}
+          ${item.qualification_reason ? `<p class="meta">${esc(item.qualification_reason)}</p>` : ''}
+          ${flags ? `<p class="meta" style="color:var(--warn)">${esc(flags)}</p>` : ''}
+        </details>
+      </div>
+      <div class="col">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+          ${variations.map((v) => `<button data-variation="${esc(v.variation)}" aria-pressed="${v.variation === item.variation}">${esc(v.variation)}${v.issues?.length ? ' *' : ''}</button>`).join('')}
+        </div>
+        <textarea data-message>${esc(item.message_edited || item.message)}</textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
+          <span class="count" data-count></span>
+          <div style="display:flex;gap:6px">
+            <button class="primary" data-action="approve">Approve</button>
+            <button data-action="regenerate">Regenerate</button>
+            <button class="danger" data-action="reject">Reject</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function sendCard(item) {
+  const url = item.instagram_url || (item.instagram_handle ? `https://www.instagram.com/${item.instagram_handle}/` : null);
+  return `
+  <article class="card" data-outreach="${esc(item.outreach_id)}">
+    <div class="row">
+      <div class="col">
+        <strong>${esc(item.business_name)}</strong>
+        <span class="pill ${esc(item.priority || '')}">ICP ${num(item.icp_score)}</span>
+        <div class="meta">Lead ${num(item.public_ref)} &middot; ${esc(item.kind)} &middot; approved by ${esc(item.approved_by || 'unknown')}</div>
+        <div class="meta" style="margin-top:6px">
+          ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener">Open profile</a>` : 'no profile link'}
+          ${item.instagram_handle ? ` &middot; <a href="https://www.instagram.com/direct/new/?username=${esc(item.instagram_handle)}" target="_blank" rel="noopener">New DM</a>` : ''}
+        </div>
+      </div>
+      <div class="col">
+        <div class="msg">${esc(item.message_to_send)}</div>
+        <div style="display:flex;gap:6px;margin-top:8px;justify-content:flex-end">
+          <button data-action="copy">Copy message</button>
+          <button class="primary" data-action="mark-sent">Mark as sent</button>
+        </div>
+      </div>
+    </div>
+  </article>`;
+}
+
+function conversationCard(item) {
+  return `
+  <article class="card" data-lead="${esc(item.lead_id)}" data-suggestion="${esc(item.suggestion_id || '')}">
+    <div class="row">
+      <div class="col">
+        <strong>${esc(item.business_name)}</strong>
+        ${item.urgency ? `<span class="pill ${item.urgency === 'high' ? 'high' : item.urgency === 'medium' ? 'medium' : ''}">${esc(item.urgency)} urgency</span>` : ''}
+        ${item.classification ? `<span class="pill">${esc(item.classification)}</span>` : ''}
+        <div class="meta">
+          ${item.instagram_handle ? `<a href="https://www.instagram.com/${esc(item.instagram_handle)}/" target="_blank" rel="noopener">@${esc(item.instagram_handle)}</a>` : ''}
+          &middot; ICP ${num(item.icp_score)} &middot; ${item.last_message_at ? new Date(item.last_message_at).toLocaleString() : ''}
+        </div>
+        <p class="meta" style="margin-bottom:4px">They said:</p>
+        <div class="msg">${esc(item.last_inbound_message || '(no message body)')}</div>
+      </div>
+      <div class="col">
+        ${item.suggestion ? `
+          <p class="meta" style="margin:0 0 4px">Suggested reply${item.suggestion_reason ? ` - ${esc(item.suggestion_reason)}` : ''}</p>
+          <textarea data-message>${esc(item.suggestion)}</textarea>
+          <div class="count" data-count></div>
+        ` : '<p class="meta">No suggestion drafted yet.</p>'}
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:flex-end">
+          ${item.suggestion ? '<button data-action="copy">Copy reply</button>' : ''}
+          <button data-action="outcome" data-outcome="INTERESTED">Interested</button>
+          <button data-action="outcome" data-outcome="NURTURE">Nurture</button>
+          <button data-action="outcome" data-outcome="NOT_INTERESTED">Not interested</button>
+          <button class="danger" data-action="opt-out">Opt out</button>
+        </div>
+        <p class="meta" style="margin-top:8px">Copy the reply, send it in Instagram, then set the outcome here.</p>
+      </div>
+    </div>
+  </article>`;
+}
+
+function dashboard(report) {
+  if (!report) return '<div class="empty">No report loaded.</div>';
+  const r = Array.isArray(report) ? report[0] : report;
+  const rate = (a, b) => (b ? `${Math.round((a / b) * 1000) / 10}%` : '-');
+  const stat = (label, value, sub = '') => `<div class="stat"><b>${value}</b><span class="meta">${label}${sub ? ` <br>${sub}` : ''}</span></div>`;
+  const table = (title, rows, keyName) => {
+    if (!rows?.length) return '';
+    return `<h3 style="font-size:14px;margin:18px 0 8px">${title}</h3>
+      <div class="meta">Measured only - no ranking is applied.</div>
+      <ul class="meta">${rows.map((row) => `<li>${esc(row[keyName] ?? 'unknown')}: ${row.sent ? `${row.reply_rate ?? 0}% reply rate (${row.replies ?? 0}/${row.sent})` : 'nothing sent yet'}${row.sent && row.sent < 20 ? ' - sample too small to read' : ''}</li>`).join('')}</ul>`;
+  };
+
+  return `
+  <div class="card">
+    <h2 style="margin:0 0 12px;font-size:16px">${esc(r.day)}</h2>
+    <div class="stats">
+      ${stat('Leads discovered', num(r.leads_discovered))}
+      ${stat('Enriched', num(r.leads_enriched))}
+      ${stat('Qualified', num(r.leads_qualified), rate(r.leads_qualified, r.leads_evaluated) + ' of those evaluated')}
+      ${stat('Messages generated', num(r.messages_generated))}
+      ${stat('Approved', num(r.messages_approved))}
+      ${stat('Sent', num(r.messages_sent))}
+      ${stat('Replies', num(r.replies), rate(r.replies, r.messages_sent) + ' reply rate')}
+      ${stat('Positive replies', num(r.positive_replies), rate(r.positive_replies, r.messages_sent))}
+      ${stat('Follow-ups due', num(r.followups_due))}
+      ${stat('Interested', num(r.interested_total))}
+      ${stat('Nurture', num(r.nurture_total))}
+      ${stat('Not interested', num(r.not_interested_total))}
+      ${stat('Open errors', num(r.errors_open))}
+    </div>
+    ${table('By niche', r.by_niche, 'niche_id')}
+    ${table('By state', r.by_state, 'state')}
+    ${table('By outreach angle', r.by_angle, 'outreach_angle')}
+    ${r.objections?.length ? `<h3 style="font-size:14px;margin:18px 0 8px">Objections seen</h3><ul class="meta">${r.objections.map((o) => `<li>${esc(o.objection_type)}: ${o.count}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function render() {
+  document.querySelectorAll('nav button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab)));
+  document.getElementById('operator-label').textContent = state.config.operator ? `signed in as ${state.config.operator}` : 'no operator set';
+
+  const view = document.getElementById('view');
+  const needsConfig = !state.config.supabase || !state.config.key;
+  if (needsConfig) {
+    view.innerHTML = '<div class="empty">Open <b>Settings</b> and point this console at your n8n instance and database.</div>';
+    return;
+  }
+
+  if (state.tab === 'approval') {
+    const items = state.data.approval;
+    view.innerHTML = items.length
+      ? `<p class="meta">${items.length} message(s) waiting. <kbd>a</kbd> approve the first, <kbd>r</kbd> refresh.</p>${items.map(approvalCard).join('')}`
+      : '<div class="empty">Nothing waiting for review.</div>';
+  } else if (state.tab === 'send') {
+    const items = state.data.send;
+    view.innerHTML = items.length
+      ? `<p class="meta">${items.length} approved message(s). Send each one yourself in Instagram, then mark it sent.</p>${items.map(sendCard).join('')}`
+      : '<div class="empty">Nothing approved and waiting to send.</div>';
+  } else if (state.tab === 'conversations') {
+    const items = state.data.conversations;
+    view.innerHTML = items.length
+      ? `<p class="meta">${items.length} conversation(s) waiting on us.</p>${items.map(conversationCard).join('')}`
+      : '<div class="empty">No open conversations.</div>';
+  } else {
+    view.innerHTML = dashboard(state.data.dashboard);
+  }
+
+  view.querySelectorAll('[data-message]').forEach(updateCount);
+}
+
+function updateCount(textarea) {
+  const counter = textarea.closest('.card')?.querySelector('[data-count]');
+  if (!counter) return;
+  const length = textarea.value.length;
+  counter.textContent = `${length} characters`;
+  counter.classList.toggle('over', length > 500);
+}
+
+// --- interactions --------------------------------------------------------
+document.addEventListener('input', (event) => {
+  if (event.target.matches('[data-message]')) updateCount(event.target);
+});
+
+document.addEventListener('click', async (event) => {
+  const tab = event.target.closest('nav button');
+  if (tab) { state.tab = tab.dataset.tab; render(); refresh(); return; }
+
+  if (event.target.id === 'refresh') { refresh(); return; }
+  if (event.target.id === 'settings-open') { openSettings(); return; }
+
+  const variation = event.target.closest('[data-variation]');
+  if (variation) {
+    const card = variation.closest('.card');
+    const item = state.data.approval.find((i) => i.outreach_id === card.dataset.outreach);
+    const chosen = (item?.variations || []).find((v) => v.variation === variation.dataset.variation);
+    if (chosen) {
+      card.querySelector('[data-message]').value = chosen.message;
+      updateCount(card.querySelector('[data-message]'));
+      card.querySelectorAll('[data-variation]').forEach((b) => b.setAttribute('aria-pressed', String(b === variation)));
+    }
+    return;
+  }
+
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const card = button.closest('.card');
+  const action = button.dataset.action;
+  const outreachId = card.dataset.outreach;
+  const leadId = card.dataset.lead;
+  const message = card.querySelector('[data-message]')?.value ?? '';
+
+  if (action === 'copy') {
+    try {
+      await navigator.clipboard.writeText(message || card.querySelector('.msg')?.textContent || '');
+      toast('Copied. Send it in Instagram, then mark it sent.');
+    } catch {
+      toast('Could not copy - select the text and copy it manually.', true);
+    }
+    return;
+  }
+
+  await withBusy(outreachId || leadId, async () => {
+    if (action === 'approve') {
+      const original = state.data.approval.find((i) => i.outreach_id === outreachId);
+      const edited = message.trim() !== String(original?.message ?? '').trim() ? message.trim() : null;
+      await act('approve', { outreach_id: outreachId, edited_message: edited });
+      toast(edited ? 'Approved with your edit.' : 'Approved.');
+      state.data.approval = state.data.approval.filter((i) => i.outreach_id !== outreachId);
+    } else if (action === 'reject') {
+      const reason = prompt('Why is this being rejected? (recorded on the lead)') ?? '';
+      await act('reject', { outreach_id: outreachId, reason, regenerate: false });
+      toast('Rejected.');
+      state.data.approval = state.data.approval.filter((i) => i.outreach_id !== outreachId);
+    } else if (action === 'regenerate') {
+      const reason = prompt('What was wrong with it? (passed back with the lead)') ?? '';
+      await act('regenerate', { outreach_id: outreachId, reason });
+      toast('Sent back for a rewrite.');
+      state.data.approval = state.data.approval.filter((i) => i.outreach_id !== outreachId);
+    } else if (action === 'mark-sent') {
+      await act('mark-sent', { outreach_id: outreachId, send_mode: 'manual' });
+      toast('Logged as sent. Follow-ups are scheduled.');
+      state.data.send = state.data.send.filter((i) => i.outreach_id !== outreachId);
+    } else if (action === 'outcome') {
+      await act('outcome', { lead_id: leadId, outcome: button.dataset.outcome });
+      toast(`Marked ${button.dataset.outcome.toLowerCase().replace('_', ' ')}.`);
+      state.data.conversations = state.data.conversations.filter((i) => i.lead_id !== leadId);
+    } else if (action === 'opt-out') {
+      if (!confirm('Suppress this business permanently, across every campaign?')) return;
+      await act('opt-out', { lead_id: leadId, reason: 'prospect_request' });
+      toast('Suppressed permanently.');
+      state.data.conversations = state.data.conversations.filter((i) => i.lead_id !== leadId);
+    }
+  });
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.target.matches('input, textarea')) return;
+  if (event.key === 'r') refresh();
+  if (event.key === 'a' && state.tab === 'approval') {
+    document.querySelector('[data-action="approve"]')?.click();
+  }
+});
+
+// --- settings ------------------------------------------------------------
+const settings = document.getElementById('settings');
+function openSettings() {
+  document.getElementById('cfg-n8n').value = state.config.n8n;
+  document.getElementById('cfg-supabase').value = state.config.supabase;
+  document.getElementById('cfg-key').value = state.config.key;
+  document.getElementById('cfg-operator').value = state.config.operator;
+  document.getElementById('cfg-theme').value = state.config.theme || 'auto';
+  settings.showModal();
+}
+settings.addEventListener('close', () => {
+  if (settings.returnValue !== 'save') return;
+  state.config = {
+    n8n: document.getElementById('cfg-n8n').value.trim(),
+    supabase: document.getElementById('cfg-supabase').value.trim(),
+    key: document.getElementById('cfg-key').value.trim(),
+    operator: document.getElementById('cfg-operator').value.trim(),
+    theme: document.getElementById('cfg-theme').value
+  };
+  saveConfig();
+  refresh();
+});
+
+applyTheme();
+render();
+if (state.config.supabase && state.config.key) refresh();
+</script>
+</body>
+</html>
