@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "note": "Provider registry. Each capability resolves to an adapter in lib/providers/. Swap a provider by changing `active` - no workflow or business logic changes. Adapters share one interface per capability so a replacement only implements that interface.",
+  "capabilities": {
+    "discovery": {
+      "active": "apify",
+      "interface": "discover(campaign, ctx) -> RawLead[]",
+      "adapters": {
+        "apify": { "module": "lib/providers/discovery.apify.js", "credentials": ["APIFY_TOKEN"], "actors": { "maps": "APIFY_GOOGLE_MAPS_ACTOR", "instagram_profile": "APIFY_INSTAGRAM_PROFILE_ACTOR", "instagram_search": "APIFY_INSTAGRAM_SEARCH_ACTOR" } },
+        "manual_csv": { "module": "lib/providers/discovery.csv.js", "credentials": [], "note": "Drop a CSV in the import webhook. Useful for testing the whole pipeline without spend." },
+        "custom_http": { "module": "lib/providers/discovery.http.js", "credentials": ["DISCOVERY_HTTP_URL", "DISCOVERY_HTTP_TOKEN"], "note": "Any replacement scraper that can answer a POST with the RawLead shape." }
+      }
+    },
+    "instagram_profile": {
+      "active": "apify",
+      "interface": "fetchProfile(handle, ctx) -> IgProfile",
+      "adapters": {
+        "apify": { "module": "lib/providers/discovery.apify.js", "credentials": ["APIFY_TOKEN"] },
+        "graph_api": { "module": "lib/providers/instagram.graph.js", "credentials": ["IG_PAGE_ACCESS_TOKEN"], "note": "Business Discovery endpoint - only for accounts your app is permitted to read." }
+      }
+    },
+    "enrichment": {
+      "active": "apollo",
+      "fallback": ["website_scrape"],
+      "interface": "enrich(company, ctx) -> EnrichmentResult",
+      "adapters": {
+        "apollo": { "module": "lib/providers/enrichment.apollo.js", "credentials": ["APOLLO_API_KEY"] },
+        "website_scrape": { "module": "lib/providers/enrichment.website.js", "credentials": [], "note": "About/Team/Contact page parse. Always runs when Apollo returns nothing - a missing contact never discards a lead." },
+        "clearbit": { "module": "lib/providers/enrichment.generic.js", "credentials": ["CLEARBIT_API_KEY"], "status": "stub" },
+        "hunter": { "module": "lib/providers/enrichment.generic.js", "credentials": ["HUNTER_API_KEY"], "status": "stub" }
+      }
+    },
+    "ai": {
+      "active": "anthropic",
+      "interface": "complete({ prompt, schema, model, maxTokens }) -> object",
+      "adapters": {
+        "anthropic": { "module": "lib/providers/ai.anthropic.js", "credentials": ["ANTHROPIC_API_KEY"], "models": { "default": "claude-sonnet-5", "heavy": "claude-opus-5" } },
+        "mock": { "module": "lib/providers/ai.mock.js", "credentials": [], "note": "Deterministic fixtures for tests and dry runs." }
+      }
+    },
+    "datastore": {
+      "active": "supabase",
+      "interface": "Postgres over REST or direct connection",
+      "adapters": {
+        "supabase": { "module": "lib/providers/datastore.supabase.js", "credentials": ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] },
+        "postgres": { "module": "lib/providers/datastore.postgres.js", "credentials": ["DATABASE_URL"], "note": "Same migrations - Supabase is only a hosting choice." }
+      }
+    },
+    "mirror": {
+      "active": "google_sheets",
+      "enabled_by": "SHEETS_ENABLED",
+      "interface": "upsertRows(rows, ctx)",
+      "adapters": {
+        "google_sheets": { "module": "lib/providers/mirror.sheets.js", "credentials": ["GOOGLE_SHEETS_SPREADSHEET_ID"], "note": "One-way mirror of qualified leads. The database stays the source of truth." },
+        "none": { "module": "lib/providers/mirror.none.js", "credentials": [] }
+      }
+    },
+    "instagram_messaging": {
+      "active": "manual",
+      "interface": "send(threadRef, message, ctx) -> SendResult | { manual: true }",
+      "adapters": {
+        "manual": { "module": "lib/providers/instagram.manual.js", "credentials": [], "note": "DEFAULT. The approval console hands the operator the approved text and the profile link; the operator sends it in Instagram and confirms. The system logs the send. This is the compliant path for cold outreach." },
+        "graph_api": { "module": "lib/providers/instagram.graph.js", "credentials": ["IG_PAGE_ACCESS_TOKEN", "IG_BUSINESS_ACCOUNT_ID"], "note": "Official Instagram Messaging API. It can reply inside an open conversation window - it cannot initiate cold DMs, and this system does not pretend otherwise." }
+      }
+    },
+    "reply_ingest": {
+      "active": "manual",
+      "interface": "webhook payload -> InboundMessage[]",
+      "adapters": {
+        "graph_webhook": { "module": "lib/providers/instagram.graph.js", "credentials": ["IG_APP_SECRET", "IG_WEBHOOK_VERIFY_TOKEN"], "note": "Official messages webhook for your own professional account. Preferred when available." },
+        "manual": { "module": "lib/providers/instagram.manual.js", "credentials": [], "note": "Operator pastes the reply into the console; identical downstream handling." }
+      }
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "note": "Follow-up cadence. Every interval is configurable per campaign (campaign.followups overrides this file). A reply at ANY step cancels every pending follow-up for that lead - enforced in lib/followups.js and by a DB trigger in db/migrations/0003_functions.sql.",
+  "timezone": "America/Los_Angeles",
+  "send_window": { "start_hour": 9, "end_hour": 18, "days": [1, 2, 3, 4, 5] },
+  "stop_on_reply": true,
+  "stop_on_statuses": ["REPLIED", "INTERESTED", "NOT_INTERESTED", "NURTURE", "CLOSED", "OPTED_OUT"],
+  "max_followups": 3,
+  "steps": [
+    {
+      "step": 0,
+      "day_offset": 0,
+      "kind": "initial",
+      "label": "Initial DM",
+      "prompt": "07-outreach-message",
+      "intent": "Open a conversation with one specific observation and one relevant question."
+    },
+    {
+      "step": 1,
+      "day_offset": 2,
+      "kind": "followup_1",
+      "label": "Follow-up #1 - short continuation",
+      "prompt": "10-followup-message",
+      "intent": "One or two lines that continue the original thought. Never 'just following up'. Re-state the specific observation in different words and make replying take five seconds.",
+      "max_chars": 300
+    },
+    {
+      "step": 2,
+      "day_offset": 5,
+      "kind": "followup_2",
+      "label": "Follow-up #2 - business observation / value",
+      "prompt": "10-followup-message",
+      "intent": "Add something they did not have before: a concrete observation about how similar brands in their niche handle this, or a number from comparable work. No pitch deck, no service list.",
+      "max_chars": 450
+    },
+    {
+      "step": 3,
+      "day_offset": 9,
+      "kind": "followup_3_final",
+      "label": "Final follow-up - close the loop",
+      "prompt": "10-followup-message",
+      "intent": "Respectful close-the-loop. Acknowledge the timing may be wrong, leave the door open, ask nothing more than a yes/no. This is the last automated touch.",
+      "max_chars": 300,
+      "final": true
+    }
+  ],
+  "after_final": {
+    "status": "NO_RESPONSE",
+    "move_to_stage": "NURTURE",
+    "nurture_recheck_days": 90
+  },
+  "rate_limits": {
+    "note": "Human-operated sending pace. The queue will not release more than this many messages per day per sending account.",
+    "max_new_dms_per_day": 30,
+    "max_followups_per_day": 40,
+    "min_seconds_between_sends": 45
+  }
+}

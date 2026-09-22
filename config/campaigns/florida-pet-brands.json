@@ -1,0 +1,28 @@
+{
+  "id": "fl-pet-brands",
+  "name": "Florida Pet Brand Outreach",
+  "status": "draft",
+  "owner": "OptiFlow Solutions",
+  "niche_id": "pet_brands",
+  "targeting": { "country": "US", "states": ["FL"], "cities": ["Miami", "Orlando", "Tampa", "Jacksonville", "Fort Lauderdale"], "exclude_cities": [], "radius_miles": 40 },
+  "icp": {
+    "min_followers": 1000,
+    "max_followers": 10000,
+    "min_products_services": 2,
+    "require_instagram": true,
+    "require_website": true,
+    "require_decision_maker": false,
+    "require_activity_within_days": 30,
+    "min_icp_score": 70,
+    "queue_bands": ["HIGH_PRIORITY", "QUALIFIED"],
+    "review_band_to_human": true
+  },
+  "discovery": { "provider": "apify", "daily_lead_target": 100, "max_results_per_search_term": 60, "search_terms_override": null, "sources": ["instagram_search", "google_maps"] },
+  "enrichment": { "provider": "apollo", "fallbacks": ["website_scrape"], "skip_if_contact_present": true, "keep_lead_without_contact": true },
+  "qualification": { "scoring_profile": "default", "model": "claude-sonnet-5", "weight_overrides": {}, "hard_gate_overrides": {} },
+  "research": { "model": "claude-opus-5", "enabled": true, "only_for_bands": ["HIGH_PRIORITY", "QUALIFIED"] },
+  "outreach": { "daily_outreach_target": 30, "variations": ["conversational", "professional", "concise"], "default_variation": "conversational", "require_human_approval": true, "sending_mode": "manual", "angle_override": null, "sender_profile": "optiflow_solutions", "max_chars": 500 },
+  "followups": { "enabled": true, "day_offsets": [2, 5, 9], "send_window": { "start_hour": 9, "end_hour": 18, "days": [1, 2, 3, 4, 5] }, "timezone": "America/New_York", "require_human_approval": true, "rate_limits": { "max_new_dms_per_day": 30, "max_followups_per_day": 40 } },
+  "mirror": { "sheets_enabled": false, "spreadsheet_id": null, "tab": "FL Pet Brands" },
+  "schedule": { "discovery_cron": "0 6 * * 1-5", "pipeline_cron": "*/15 6-20 * * 1-5", "followup_cron": "0 9,14 * * 1-5", "report_cron": "0 18 * * *" }
+}

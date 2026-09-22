@@ -1,0 +1,19 @@
+{
+  "name": "optiflow-insta-outreach",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OptiFlow Solutions - AI-assisted Instagram outbound prospecting and outreach automation (discover -> enrich -> qualify -> research -> personalize -> approve -> send -> reply -> follow up -> nurture).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:n8n": "node n8n/build.mjs",
+    "test": "node --test tests/",
+    "check": "npm run build:n8n && npm test",
+    "validate:config": "node scripts/validate-config.mjs",
+    "report:daily": "node scripts/daily-report.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

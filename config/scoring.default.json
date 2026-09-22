@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "note": "ICP scoring is computed in code (lib/scoring.js) from deterministic facts + the AI's judgement sub-scores. The AI never returns the final score on its own - it returns component judgements that are blended here, so two identical leads always score identically and every point is explainable.",
+  "weights": {
+    "location_fit": 14,
+    "niche_fit": 15,
+    "follower_fit": 12,
+    "products_fit": 10,
+    "business_quality": 12,
+    "instagram_activity": 8,
+    "website_quality": 5,
+    "decision_maker": 8,
+    "cx_need": 10,
+    "outreach_potential": 6
+  },
+  "sources": {
+    "location_fit": "deterministic",
+    "niche_fit": "blend:0.4/0.6",
+    "follower_fit": "deterministic",
+    "products_fit": "deterministic",
+    "business_quality": "ai",
+    "instagram_activity": "deterministic",
+    "website_quality": "blend:0.5/0.5",
+    "decision_maker": "deterministic",
+    "cx_need": "ai",
+    "outreach_potential": "ai"
+  },
+  "follower_curve": {
+    "ideal_min": 1000,
+    "ideal_max": 10000,
+    "soft_min": 500,
+    "soft_max": 25000,
+    "below_soft_min_score": 0,
+    "above_soft_max_score": 20
+  },
+  "products_curve": {
+    "min_required": 2,
+    "full_credit_at": 6,
+    "below_min_score": 25,
+    "unknown_score": 50
+  },
+  "activity_curve": {
+    "fresh_days": 14,
+    "acceptable_days": 45,
+    "stale_days": 120,
+    "unknown_score": 50
+  },
+  "decision_maker_scores": {
+    "named_with_role_and_contact": 100,
+    "named_with_role": 85,
+    "named_only": 65,
+    "role_only": 45,
+    "none": 20
+  },
+  "bands": [
+    { "label": "HIGH_PRIORITY", "min_score": 85, "action": "queue_first" },
+    { "label": "QUALIFIED", "min_score": 70, "action": "queue" },
+    { "label": "REVIEW", "min_score": 55, "action": "manual_review" },
+    { "label": "NOT_QUALIFIED", "min_score": 0, "action": "archive" }
+  ],
+  "hard_gates": {
+    "note": "A failed hard gate forces NOT_QUALIFIED regardless of score. Every gate is switchable per campaign.",
+    "require_instagram": true,
+    "require_in_target_state": true,
+    "require_business_account": false,
+    "require_website": false,
+    "require_decision_maker": false,
+    "max_followers_absolute": 250000,
+    "min_followers_absolute": 300,
+    "block_personal_accounts": true,
+    "block_agencies_and_competitors": true,
+    "block_previously_contacted": true
+  },
+  "penalties": {
+    "no_website": 0,
+    "no_email_and_no_phone": 0,
+    "private_account": 15,
+    "link_in_bio_only_aggregator": 0,
+    "suspected_reseller": 20
+  },
+  "priority_map": {
+    "HIGH_PRIORITY": "high",
+    "QUALIFIED": "medium",
+    "REVIEW": "low",
+    "NOT_QUALIFIED": "none"
+  }
+}

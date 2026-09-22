@@ -1,0 +1,391 @@
+{
+  "version": 1,
+  "updated": "2026-09-22",
+  "note": "Configurable niche database. Add a niche by appending an object here (or a row in the `niches` table - db/seed/0001_seed.sql loads this file's content). Nothing in lib/ or n8n/ hard-codes a niche id.",
+  "niches": [
+    {
+      "id": "medspas",
+      "name": "Medspas",
+      "tier": "primary",
+      "business_model": "local_service",
+      "keywords": ["medspa", "med spa", "medical spa", "aesthetics", "botox", "filler", "injectables", "laser hair removal", "skin clinic", "iv therapy"],
+      "negative_keywords": ["nail salon", "massage only", "tattoo removal franchise directory", "medspa marketing agency", "medspa consultant", "medspa software"],
+      "search_terms": ["{city} medspa", "{city} medical spa", "{city} botox clinic", "{city} aesthetics clinic", "medspa {state}", "med spa near {city}"],
+      "instagram_hashtags": ["medspa{city_slug}", "{city_slug}botox", "medspalife", "aestheticsclinic"],
+      "default_locations": { "states": ["CA", "TX", "FL", "AZ", "NV"] },
+      "icp_rules": {
+        "min_followers": 1000,
+        "max_followers": 10000,
+        "min_products_services": 2,
+        "products_services_meaning": "distinct treatments on the service menu",
+        "require_website": false,
+        "require_recent_activity_days": 45
+      },
+      "pain_points": [
+        "DM and form inquiries about pricing arriving faster than front desk can answer",
+        "Leads asking about availability after hours and on weekends",
+        "No structured follow-up on consult inquiries that did not book",
+        "Front desk splitting attention between in-room patients and the phone",
+        "Seasonal promo spikes overwhelming the inbox"
+      ],
+      "recommended_services": ["Lead response / speed-to-lead support", "After-hours inquiry coverage", "Social media inbox support", "Appointment inquiry handling", "Lead follow-up support"],
+      "outreach_angles": [
+        { "id": "speed_to_lead", "label": "Lead response speed", "when": "Active promo posts, high comment volume, visible 'DM us for pricing' CTA", "hook": "how quickly pricing DMs get answered when the room is full" },
+        { "id": "after_hours", "label": "After-hours inquiries", "when": "Posted hours end before 7pm, inquiries visible in comments at night", "hook": "the inquiries that land after the front desk goes home" },
+        { "id": "inquiry_handling", "label": "Appointment inquiry handling", "when": "Booking link in bio, multiple treatments offered", "hook": "handling the back-and-forth before someone actually books" },
+        { "id": "followup_gap", "label": "Consult follow-up", "when": "Consult-led services (injectables, body contouring)", "hook": "what happens to consults that do not book on the first call" },
+        { "id": "social_inbox", "label": "Social inbox coverage", "when": "High engagement, frequent posting, comment questions unanswered", "hook": "questions stacking up in comments and DMs" }
+      ]
+    },
+    {
+      "id": "dental_clinics",
+      "name": "Dental Clinics",
+      "tier": "primary",
+      "business_model": "local_service",
+      "keywords": ["dentist", "dental", "family dentistry", "cosmetic dentistry", "orthodontist", "invisalign", "implants", "pediatric dentist", "endodontist"],
+      "negative_keywords": ["dental lab supplier", "dental marketing", "dental billing software", "dental school", "dental staffing agency"],
+      "search_terms": ["{city} dentist", "{city} dental clinic", "{city} cosmetic dentistry", "{city} orthodontist", "dental practice {state}"],
+      "instagram_hashtags": ["{city_slug}dentist", "dentistryof{city_slug}", "smilemakeover"],
+      "default_locations": { "states": ["TX", "CA", "FL", "GA", "NC"] },
+      "icp_rules": {
+        "min_followers": 1000,
+        "max_followers": 10000,
+        "min_products_services": 2,
+        "products_services_meaning": "distinct treatment lines (general, cosmetic, ortho, implants, pediatric)",
+        "require_website": true,
+        "require_recent_activity_days": 60
+      },
+      "pain_points": [
+        "Inbound calls missed while chairside",
+        "New patient inquiries not returned same day",
+        "Insurance and pricing questions eating front-desk time",
+        "Recall and reactivation lists never worked",
+        "Voicemail overflow at lunch and after close"
+      ],
+      "recommended_services": ["Inbound call overflow support", "Appointment inquiry handling", "Patient question triage", "Recall / reactivation outreach", "Back-office and admin support"],
+      "outreach_angles": [
+        { "id": "missed_calls", "label": "Missed inbound calls", "when": "Small practice, phone number prominent, limited front-desk staff", "hook": "calls that come in while the team is chairside" },
+        { "id": "new_patient_inquiries", "label": "New patient inquiries", "when": "Actively advertising new-patient specials", "hook": "how fast new-patient inquiries get a human reply" },
+        { "id": "admin_support", "label": "Administrative support", "when": "Multi-provider practice, insurance-heavy messaging", "hook": "the admin load behind every new patient" },
+        { "id": "after_hours", "label": "After-hours communication", "when": "Posted hours end by 5pm", "hook": "inquiries arriving after the office closes" },
+        { "id": "recall_followup", "label": "Recall follow-up", "when": "Established practice, recurring-care services", "hook": "patients who never rebooked after their last visit" }
+      ]
+    },
+    {
+      "id": "pet_brands",
+      "name": "Pet-care / Pet Accessory Brands",
+      "tier": "primary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["pet", "dog", "cat", "pet accessories", "pet care", "dog harness", "pet supplements", "pet tech", "pet feeder", "litter box"],
+      "negative_keywords": ["pet adoption shelter", "rescue nonprofit", "veterinary hospital group", "pet influencer", "dog account"],
+      "search_terms": ["{state} pet brand", "pet accessories brand {city}", "dog products shop {state}", "pet supplements brand"],
+      "instagram_hashtags": ["petbrand", "dogaccessories", "petproducts", "pettech"],
+      "default_locations": { "states": ["FL", "CA", "TX", "NY", "CO"] },
+      "icp_rules": {
+        "min_followers": 1000,
+        "max_followers": 10000,
+        "min_products_services": 2,
+        "products_services_meaning": "distinct SKUs / product lines visible on the store",
+        "require_website": true,
+        "require_recent_activity_days": 30
+      },
+      "pain_points": [
+        "Where-is-my-order questions dominating the inbox",
+        "Shipping and delivery exceptions handled by the founder",
+        "Returns and exchanges with no defined process",
+        "Product-fit questions (size, breed, age) before purchase",
+        "Support volume spiking around launches and holidays"
+      ],
+      "recommended_services": ["E-commerce customer support", "Order management support", "Email support", "Live chat support", "Social media inbox support"],
+      "outreach_angles": [
+        { "id": "order_questions", "label": "Order & shipping questions", "when": "Store live, recent launch or promo, visible order questions in comments", "hook": "where-is-my-order messages piling up" },
+        { "id": "returns", "label": "Returns & exchanges", "when": "Physical goods with sizing or fit variables", "hook": "returns and exchanges handled one-by-one" },
+        { "id": "product_questions", "label": "Pre-purchase product questions", "when": "Technical or fit-sensitive products", "hook": "buyers asking which one is right for their dog before they order" },
+        { "id": "chat_support", "label": "Live chat coverage", "when": "Site has chat widget or high traffic signals", "hook": "chat sitting unanswered during the buying window" },
+        { "id": "growth_support", "label": "Support during growth", "when": "Rapid follower growth or launch cadence", "hook": "support volume growing faster than the team" }
+      ]
+    },
+    {
+      "id": "womens_bags",
+      "name": "Women's Bags / Accessories Brands",
+      "tier": "primary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["handbags", "purses", "tote", "crossbody", "leather bags", "women's accessories", "jewelry", "scarves", "clutch"],
+      "negative_keywords": ["replica", "dupe", "reseller", "wholesale supplier directory", "thrift reseller"],
+      "search_terms": ["women's handbag brand {state}", "{city} leather bags brand", "women's accessories brand"],
+      "instagram_hashtags": ["handbagbrand", "womensaccessories", "leatherbags"],
+      "default_locations": { "states": ["NY", "CA", "FL", "IL", "TX"] },
+      "icp_rules": {
+        "min_followers": 1000,
+        "max_followers": 10000,
+        "min_products_services": 2,
+        "products_services_meaning": "distinct SKUs / collections",
+        "require_website": true,
+        "require_recent_activity_days": 30
+      },
+      "pain_points": [
+        "Product questions (dimensions, material, care) before purchase",
+        "Order status and shipping questions",
+        "Exchanges on colour and size",
+        "DM volume from paid social spikes",
+        "Founder answering every message personally"
+      ],
+      "recommended_services": ["E-commerce customer support", "Social media inbox support", "Order management support", "Email + chat support", "Dedicated support agent"],
+      "outreach_angles": [
+        { "id": "product_questions", "label": "Product detail questions", "when": "Detail-heavy products, comment questions about size/material", "hook": "the same product questions answered over and over" },
+        { "id": "orders", "label": "Order questions", "when": "Active store with visible order flow", "hook": "order questions arriving outside working hours" },
+        { "id": "exchanges", "label": "Exchanges", "when": "Colour/size variants", "hook": "exchange requests handled manually" },
+        { "id": "social_inbox", "label": "Social inbox coverage", "when": "Paid social or high engagement", "hook": "DMs coming in faster than one person can answer" },
+        { "id": "growth_support", "label": "Support during growth", "when": "Fast growth signals", "hook": "keeping response times steady while the brand scales" }
+      ]
+    },
+    {
+      "id": "home_robots",
+      "name": "Home-maintenance Robot Brands",
+      "tier": "primary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["robot vacuum", "robot mower", "lawn robot", "pool robot", "window cleaning robot", "home robotics", "smart home robot", "autonomous yard"],
+      "negative_keywords": ["robotics research lab", "industrial automation integrator", "robot toy", "university robotics club"],
+      "search_terms": ["home robot brand", "robot lawn mower brand {state}", "robot vacuum brand", "smart home robotics company"],
+      "instagram_hashtags": ["robotvacuum", "robotmower", "smarthomerobot"],
+      "default_locations": { "states": ["CA", "WA", "TX", "NY", "MA"] },
+      "icp_rules": {
+        "min_followers": 1000,
+        "max_followers": 10000,
+        "min_products_services": 2,
+        "products_services_meaning": "distinct product models / SKUs",
+        "require_website": true,
+        "require_recent_activity_days": 30
+      },
+      "pain_points": [
+        "Technical setup and troubleshooting questions",
+        "Warranty and RMA handling",
+        "Pre-purchase questions about compatibility and coverage area",
+        "Firmware / app issues generating repeat contacts",
+        "After-sales support expectations on a high-ticket product"
+      ],
+      "recommended_services": ["Technical customer support (tier 1)", "After-sales / warranty support", "Order management support", "Email + chat support", "24/7 support coverage"],
+      "outreach_angles": [
+        { "id": "technical_questions", "label": "Technical questions", "when": "Product requires setup, app pairing, or has a technical spec sheet", "hook": "setup and troubleshooting questions on a high-ticket product" },
+        { "id": "warranty", "label": "Warranty & after-sales", "when": "Warranty terms advertised", "hook": "warranty and after-sales requests handled by the same small team" },
+        { "id": "presale_questions", "label": "Pre-sale questions", "when": "Compatibility or coverage variables", "hook": "buyers asking whether it fits their home before spending that much" },
+        { "id": "order_support", "label": "Order support", "when": "Direct-to-consumer store with shipping complexity", "hook": "order and delivery questions on heavy items" },
+        { "id": "coverage_247", "label": "24/7 coverage", "when": "Selling across time zones", "hook": "support requests landing in time zones nobody is awake for" }
+      ]
+    },
+    {
+      "id": "comfort_wear",
+      "name": "Comfort Wear / Apparel Brands",
+      "tier": "primary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["loungewear", "comfort wear", "sleepwear", "pajamas", "cozy apparel", "athleisure", "basics apparel", "knitwear"],
+      "negative_keywords": ["print on demand dropship course", "clothing wholesaler directory", "fashion blogger"],
+      "search_terms": ["loungewear brand {state}", "comfort wear brand", "sleepwear brand {city}"],
+      "instagram_hashtags": ["loungewearbrand", "comfortwear", "sleepwearbrand"],
+      "default_locations": { "states": ["CA", "NY", "TX", "FL", "OR"] },
+      "icp_rules": {
+        "min_followers": 1000,
+        "max_followers": 10000,
+        "min_products_services": 2,
+        "products_services_meaning": "distinct styles / collections",
+        "require_website": true,
+        "require_recent_activity_days": 30
+      },
+      "pain_points": [
+        "Sizing and fit questions before purchase",
+        "Returns and exchanges volume",
+        "Order and shipping status questions",
+        "Restock and back-in-stock requests",
+        "Inbox spikes on drops and sales"
+      ],
+      "recommended_services": ["E-commerce customer support", "Returns & exchanges handling", "Email + chat support", "Social media inbox support", "Order management support"],
+      "outreach_angles": [
+        { "id": "sizing_questions", "label": "Sizing questions", "when": "Apparel with fit variables, size questions in comments", "hook": "sizing questions before every order" },
+        { "id": "returns", "label": "Returns & exchanges", "when": "Apparel returns are structural", "hook": "exchanges eating the week after a drop" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order status questions landing at all hours" },
+        { "id": "drop_spikes", "label": "Drop-day volume", "when": "Launch/drop cadence visible", "hook": "the inbox on drop day" },
+        { "id": "chat_support", "label": "Chat coverage", "when": "Site chat widget present", "hook": "chat questions during the buying window" }
+      ]
+    },
+    {
+      "id": "beauty_salons",
+      "name": "Beauty Salons",
+      "tier": "secondary",
+      "business_model": "local_service",
+      "keywords": ["hair salon", "beauty salon", "lash studio", "brow bar", "nail studio", "blowout bar", "hair extensions"],
+      "negative_keywords": ["beauty school", "salon software", "beauty supply wholesaler"],
+      "search_terms": ["{city} beauty salon", "{city} hair salon", "{city} lash studio"],
+      "instagram_hashtags": ["{city_slug}salon", "{city_slug}lashes"],
+      "default_locations": { "states": ["CA", "TX", "FL", "NY", "AZ"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "service menu items", "require_website": false, "require_recent_activity_days": 45 },
+      "pain_points": ["Booking DMs answered between clients", "No-show and reschedule handling", "After-hours booking requests", "Price list questions repeated daily", "Promo campaigns creating inbox spikes"],
+      "recommended_services": ["Social media inbox support", "Appointment inquiry handling", "After-hours coverage", "Lead follow-up support"],
+      "outreach_angles": [
+        { "id": "booking_dms", "label": "Booking DMs", "when": "Bookings run through DMs", "hook": "booking DMs answered between clients" },
+        { "id": "after_hours", "label": "After-hours requests", "when": "Evening/weekend inquiries visible", "hook": "requests that land after close" },
+        { "id": "price_questions", "label": "Repeat price questions", "when": "No published price list", "hook": "the same pricing question every day" },
+        { "id": "followup_gap", "label": "Follow-up on inquiries", "when": "High inquiry volume", "hook": "inquiries that never turned into a booking" }
+      ]
+    },
+    {
+      "id": "fitness_accessories",
+      "name": "Fitness / Gym Accessory Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["gym accessories", "fitness equipment", "resistance bands", "lifting belts", "gym bag", "supplements", "recovery tools"],
+      "negative_keywords": ["gym franchise", "personal trainer coaching program", "fitness influencer"],
+      "search_terms": ["gym accessories brand {state}", "fitness equipment brand {city}", "recovery tools brand"],
+      "instagram_hashtags": ["gymaccessories", "fitnessbrand", "recoverytools"],
+      "default_locations": { "states": ["TX", "CA", "FL", "NV", "UT"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct SKUs", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Product-fit and usage questions", "Order and shipping status", "Returns on sizing", "Promo-driven inbox spikes", "Wholesale inquiries mixed with consumer support"],
+      "recommended_services": ["E-commerce customer support", "Order management support", "Email + chat support", "Social media inbox support"],
+      "outreach_angles": [
+        { "id": "product_questions", "label": "Product questions", "when": "Usage/technique questions visible", "hook": "usage questions before purchase" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order and shipping questions" },
+        { "id": "returns", "label": "Returns", "when": "Sizing variables", "hook": "returns handled manually" },
+        { "id": "promo_spikes", "label": "Promo spikes", "when": "Frequent promos", "hook": "the inbox during a sale" }
+      ]
+    },
+    {
+      "id": "fashion_brands",
+      "name": "Fashion Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["fashion brand", "clothing brand", "streetwear", "womenswear", "menswear", "boutique"],
+      "negative_keywords": ["fashion blogger", "styling course", "clothing wholesaler directory"],
+      "search_terms": ["fashion brand {state}", "clothing brand {city}", "boutique brand {state}"],
+      "instagram_hashtags": ["fashionbrand", "clothingbrand", "{city_slug}fashion"],
+      "default_locations": { "states": ["NY", "CA", "FL", "TX", "IL"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct styles / collections", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Sizing and fit questions", "Returns and exchanges", "Order status questions", "Drop-day inbox spikes", "Wholesale vs consumer inquiries mixed"],
+      "recommended_services": ["E-commerce customer support", "Returns & exchanges handling", "Social media inbox support", "Email + chat support"],
+      "outreach_angles": [
+        { "id": "sizing_questions", "label": "Sizing questions", "when": "Fit variables", "hook": "sizing questions before every order" },
+        { "id": "returns", "label": "Returns & exchanges", "when": "Apparel returns", "hook": "exchanges after a drop" },
+        { "id": "drop_spikes", "label": "Drop-day volume", "when": "Drop cadence", "hook": "the inbox on launch day" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order status questions" }
+      ]
+    },
+    {
+      "id": "gym_wear",
+      "name": "Gym Wear Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["gym wear", "activewear", "workout clothes", "training apparel", "performance apparel", "leggings"],
+      "negative_keywords": ["gym franchise", "fitness coaching program"],
+      "search_terms": ["activewear brand {state}", "gym wear brand {city}", "performance apparel brand"],
+      "instagram_hashtags": ["activewearbrand", "gymwear", "trainingapparel"],
+      "default_locations": { "states": ["CA", "TX", "FL", "UT", "NV"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct styles", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Sizing and fit questions", "Returns and exchanges", "Restock requests", "Order status questions", "Launch-day volume"],
+      "recommended_services": ["E-commerce customer support", "Returns & exchanges handling", "Order management support", "Email + chat support"],
+      "outreach_angles": [
+        { "id": "sizing_questions", "label": "Sizing questions", "when": "Fit-critical apparel", "hook": "fit questions before purchase" },
+        { "id": "returns", "label": "Returns & exchanges", "when": "Sizing variables", "hook": "exchange volume" },
+        { "id": "restocks", "label": "Restock requests", "when": "Frequent sellouts", "hook": "restock questions filling the inbox" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order status questions" }
+      ]
+    },
+    {
+      "id": "lingerie",
+      "name": "Lingerie Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["lingerie", "intimates", "bras", "sleep and intimates", "shapewear"],
+      "negative_keywords": ["adult content", "onlyfans", "modelling agency"],
+      "search_terms": ["lingerie brand {state}", "intimates brand {city}", "shapewear brand"],
+      "instagram_hashtags": ["lingeriebrand", "intimatesbrand", "shapewearbrand"],
+      "default_locations": { "states": ["NY", "CA", "FL", "TX", "IL"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct styles / size ranges", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Detailed sizing and fit questions", "Exchanges", "Discreet order and shipping questions", "Product care questions", "High pre-purchase question volume"],
+      "recommended_services": ["E-commerce customer support", "Fit / sizing support", "Returns & exchanges handling", "Email + chat support"],
+      "outreach_angles": [
+        { "id": "sizing_questions", "label": "Fit & sizing support", "when": "Size-critical category", "hook": "fit questions that need a real answer before someone buys" },
+        { "id": "exchanges", "label": "Exchanges", "when": "Size variance", "hook": "exchange handling" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order and delivery questions" },
+        { "id": "product_questions", "label": "Product care questions", "when": "Care-sensitive materials", "hook": "product care questions after purchase" }
+      ]
+    },
+    {
+      "id": "watches_eyewear",
+      "name": "Watches / Eyewear Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["watch brand", "watches", "eyewear", "sunglasses", "optical frames", "blue light glasses"],
+      "negative_keywords": ["watch reseller", "replica", "pawn shop", "optometrist practice"],
+      "search_terms": ["watch brand {state}", "eyewear brand {city}", "sunglasses brand {state}"],
+      "instagram_hashtags": ["watchbrand", "eyewearbrand", "sunglassesbrand"],
+      "default_locations": { "states": ["CA", "NY", "FL", "TX", "CO"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct models / collections", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Warranty and repair questions", "Pre-purchase spec questions", "Order and shipping status on high-value items", "Returns", "Prescription / fit questions (eyewear)"],
+      "recommended_services": ["E-commerce customer support", "After-sales / warranty support", "Order management support", "Email + chat support"],
+      "outreach_angles": [
+        { "id": "warranty", "label": "Warranty & repairs", "when": "Warranty advertised", "hook": "warranty and repair requests" },
+        { "id": "presale_questions", "label": "Pre-sale spec questions", "when": "Spec-sensitive products", "hook": "spec questions before a high-ticket purchase" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order and delivery questions on valuable items" },
+        { "id": "returns", "label": "Returns", "when": "Fit variables", "hook": "returns and exchanges" }
+      ]
+    },
+    {
+      "id": "car_accessories",
+      "name": "Car Accessory Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["car accessories", "auto accessories", "car detailing products", "floor mats", "car organizer", "dash cam", "car care"],
+      "negative_keywords": ["car dealership", "auto repair shop", "car rental"],
+      "search_terms": ["car accessories brand {state}", "auto accessories brand {city}", "car care brand"],
+      "instagram_hashtags": ["caraccessories", "carcarebrand", "autoaccessories"],
+      "default_locations": { "states": ["TX", "CA", "FL", "AZ", "GA"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct SKUs", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Vehicle fitment questions", "Order and shipping status", "Installation questions", "Returns on wrong-fit items", "Warranty claims on electronics"],
+      "recommended_services": ["E-commerce customer support", "Technical / fitment support", "Order management support", "Email + chat support"],
+      "outreach_angles": [
+        { "id": "fitment_questions", "label": "Fitment questions", "when": "Vehicle-specific products", "hook": "will-it-fit-my-car questions before every order" },
+        { "id": "orders", "label": "Order questions", "when": "Active store", "hook": "order status questions" },
+        { "id": "technical_questions", "label": "Installation questions", "when": "Install-required products", "hook": "installation questions after delivery" },
+        { "id": "returns", "label": "Returns", "when": "Fitment errors", "hook": "wrong-fit returns" }
+      ]
+    },
+    {
+      "id": "tech_products",
+      "name": "Tech Product Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["consumer electronics", "smart home", "3d printer", "gadgets", "audio brand", "charging accessories", "hardware startup"],
+      "negative_keywords": ["software agency", "IT services provider", "crypto", "app studio"],
+      "search_terms": ["consumer electronics brand {state}", "smart home brand", "3d printer brand", "hardware brand {city}"],
+      "instagram_hashtags": ["techbrand", "smarthome", "3dprinting", "gadgets"],
+      "default_locations": { "states": ["CA", "WA", "TX", "NY", "MA"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct product models", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Technical troubleshooting volume", "Firmware / app support requests", "Warranty and RMA handling", "Pre-sale compatibility questions", "Support across time zones"],
+      "recommended_services": ["Tier 1 technical support", "After-sales / warranty support", "Email + chat support", "24/7 support coverage", "Order management support"],
+      "outreach_angles": [
+        { "id": "technical_questions", "label": "Technical support volume", "when": "Products need setup or an app", "hook": "troubleshooting tickets from a growing install base" },
+        { "id": "warranty", "label": "Warranty / RMA", "when": "Warranty terms published", "hook": "RMA and warranty handling" },
+        { "id": "presale_questions", "label": "Pre-sale compatibility", "when": "Compatibility matters", "hook": "compatibility questions before purchase" },
+        { "id": "coverage_247", "label": "Time-zone coverage", "when": "Selling internationally", "hook": "tickets landing overnight" }
+      ]
+    },
+    {
+      "id": "ecommerce_general",
+      "name": "General E-commerce Product Brands",
+      "tier": "secondary",
+      "business_model": "ecommerce_brand",
+      "keywords": ["shop now", "online store", "dtc brand", "product brand", "free shipping", "new drop"],
+      "negative_keywords": ["dropshipping course", "marketing agency", "print on demand tutorial", "affiliate marketer"],
+      "search_terms": ["dtc brand {state}", "online store {city}", "product brand {state}"],
+      "instagram_hashtags": ["dtcbrand", "smallbusiness", "onlinestore"],
+      "default_locations": { "states": ["CA", "NY", "TX", "FL", "IL"] },
+      "icp_rules": { "min_followers": 1000, "max_followers": 10000, "min_products_services": 2, "products_services_meaning": "distinct SKUs", "require_website": true, "require_recent_activity_days": 30 },
+      "pain_points": ["Order status questions", "Returns and refunds", "Product questions pre-purchase", "Multi-channel inbox (email, chat, DMs, marketplace)", "Support volume tied to ad spend"],
+      "recommended_services": ["E-commerce customer support", "Order management support", "Email support", "Live chat support", "Social media support"],
+      "outreach_angles": [
+        { "id": "order_questions", "label": "Order questions", "when": "Active store", "hook": "order and shipping questions" },
+        { "id": "returns", "label": "Returns & refunds", "when": "Physical goods", "hook": "returns handled one message at a time" },
+        { "id": "multichannel", "label": "Multi-channel inbox", "when": "Email + chat + DMs visible", "hook": "support spread across four different inboxes" },
+        { "id": "growth_support", "label": "Support during growth", "when": "Scaling ad spend or fast growth", "hook": "support volume rising with ad spend" }
+      ]
+    }
+  ]
+}

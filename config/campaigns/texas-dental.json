@@ -1,0 +1,34 @@
+{
+  "id": "tx-dental",
+  "name": "Texas Dental Clinic Outreach",
+  "status": "active",
+  "owner": "OptiFlow Solutions",
+  "niche_id": "dental_clinics",
+  "targeting": {
+    "country": "US",
+    "states": ["TX"],
+    "cities": ["Houston", "Dallas", "Austin", "San Antonio", "Fort Worth", "Plano", "Frisco"],
+    "exclude_cities": [],
+    "radius_miles": 30
+  },
+  "icp": {
+    "min_followers": 1000,
+    "max_followers": 10000,
+    "min_products_services": 2,
+    "require_instagram": true,
+    "require_website": true,
+    "require_decision_maker": false,
+    "require_activity_within_days": 60,
+    "min_icp_score": 72,
+    "queue_bands": ["HIGH_PRIORITY", "QUALIFIED"],
+    "review_band_to_human": true
+  },
+  "discovery": { "provider": "apify", "daily_lead_target": 80, "max_results_per_search_term": 50, "search_terms_override": null, "sources": ["google_maps"] },
+  "enrichment": { "provider": "apollo", "fallbacks": ["website_scrape"], "skip_if_contact_present": true, "keep_lead_without_contact": true },
+  "qualification": { "scoring_profile": "default", "model": "claude-sonnet-5", "weight_overrides": { "website_quality": 8, "outreach_potential": 3 }, "hard_gate_overrides": { "require_website": true } },
+  "research": { "model": "claude-opus-5", "enabled": true, "only_for_bands": ["HIGH_PRIORITY", "QUALIFIED"] },
+  "outreach": { "daily_outreach_target": 25, "variations": ["conversational", "professional", "concise"], "default_variation": "professional", "require_human_approval": true, "sending_mode": "manual", "angle_override": null, "sender_profile": "optiflow_solutions", "max_chars": 500 },
+  "followups": { "enabled": true, "day_offsets": [3, 6, 10], "send_window": { "start_hour": 9, "end_hour": 17, "days": [1, 2, 3, 4, 5] }, "timezone": "America/Chicago", "require_human_approval": true, "rate_limits": { "max_new_dms_per_day": 25, "max_followups_per_day": 35 } },
+  "mirror": { "sheets_enabled": true, "spreadsheet_id": null, "tab": "TX Dental" },
+  "schedule": { "discovery_cron": "0 7 * * 1-5", "pipeline_cron": "*/15 7-20 * * 1-5", "followup_cron": "0 10,15 * * 1-5", "report_cron": "0 18 * * *" }
+}
