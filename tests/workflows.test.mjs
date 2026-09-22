@@ -189,3 +189,18 @@ test('every workflow that claims leads uses the locking claim function', () => {
     assert.match(claimNode.parameters.jsonBody, /p_stale_minutes/, `${name} must recover abandoned claims`);
   }
 });
+
+test('qualification scores niche fit from the stored cleaning flags', () => {
+  const clean = byName['wf02-clean-dedupe'];
+  const store = clean.nodes.find((n) => n.name === 'Store Cleaning Flags');
+  assert.ok(store, 'cleaning must persist its flags');
+  assert.match(bodyOf(store), /cleaning_flags/);
+
+  const qualify = codeNodes(byName['wf04-qualification']).find((n) => n.name === 'Parse + Score');
+  assert.match(qualify.parameters.jsCode, /flags: context\.cleaning_flags/);
+  assert.doesNotMatch(
+    qualify.parameters.jsCode,
+    /flags: \{ niche_hits: \[\] \}/,
+    'an empty placeholder would score every lead blind on niche fit'
+  );
+});

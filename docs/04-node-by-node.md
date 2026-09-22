@@ -64,7 +64,7 @@ Log Discovery Error -> For Each Search Term
 
 Normalise, filter and de-duplicate scraped leads.
 
-**13 nodes.** Import from `n8n/workflows/wf02-clean-dedupe.json`.
+**14 nodes.** Import from `n8n/workflows/wf02-clean-dedupe.json`.
 
 | Node | Type | Talks to | Reliability | Why it is there |
 | --- | --- | --- | --- | --- |
@@ -76,6 +76,7 @@ Normalise, filter and de-duplicate scraped leads.
 | Apply Cleaning Rules | Code | inlines `lib/normalize.js`, `lib/clean.js`, `lib/dedupe.js` | - | Rules come from config/cleaning.json, inlined at build time. Edit that file and rebuild to change what is filtered - no node edits. |
 | Keep or Drop | Switch |  | - |  |
 | Tag Company With Niche | HTTP Request | db: `PATCH companies` | retry x3, continues on fail | Only the niche tagging. The cleaning flags travel on the advance_lead detail into the activity log - writing them here would overwrite companies.raw, which holds the provider payload. |
+| Store Cleaning Flags | HTTP Request | db: `PATCH leads` | retry x3 | Niche keyword hits, personal-account signals and location reasoning. Qualification scores niche fit from these, so they must survive the cleaning run. |
 | Advance To CLEANED | HTTP Request | db: `advance_lead()` | retry x3 |  |
 | Record Drop Reason | HTTP Request | db: `PATCH leads` | retry x3 |  |
 | Advance To DISQUALIFIED | HTTP Request | db: `advance_lead()` | retry x3 |  |
@@ -94,7 +95,8 @@ Fetch Company Record (output 1) -> Classify Failure
 Apply Cleaning Rules -> Keep or Drop
 Keep or Drop (output 0) -> Tag Company With Niche
 Keep or Drop (output 1) -> Record Drop Reason
-Tag Company With Niche -> Advance To CLEANED
+Tag Company With Niche -> Store Cleaning Flags
+Store Cleaning Flags -> Advance To CLEANED
 Record Drop Reason -> Advance To DISQUALIFIED
 Classify Failure -> Record Failure
 ```

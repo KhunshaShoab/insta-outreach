@@ -327,6 +327,60 @@
     },
     {
       "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ cleaning_flags: $json.flags }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "08ddfef3a0fcd41bcf416a38",
+      "name": "Store Cleaning Flags",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Niche keyword hits, personal-account signals and location reasoning. Qualification scores niche fit from these, so they must survive the cleaning run."
+    },
+    {
+      "parameters": {
         "method": "POST",
         "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/advance_lead",
         "authentication": "genericCredentialType",
@@ -350,7 +404,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id,\n    p_to_stage: \"CLEANED\",\n    p_status: \"NEW\",\n    p_step: \"clean.normalize_filter_dedupe\",\n    p_detail: { actor: \"n8n:wf02\", flags: $json.flags },\n    p_execution_id: $execution.id\n  }) }}",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id,\n    p_to_stage: \"CLEANED\",\n    p_status: \"NEW\",\n    p_step: \"clean.normalize_filter_dedupe\",\n    p_detail: { actor: \"n8n:wf02\", flags: $('Apply Cleaning Rules').item.json.flags },\n    p_execution_id: $execution.id\n  }) }}",
         "options": {
           "timeout": 30000,
           "response": {
@@ -365,7 +419,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1940,
+        2180,
         300
       ],
       "credentials": {
@@ -648,6 +702,17 @@
       ]
     },
     "Tag Company With Niche": {
+      "main": [
+        [
+          {
+            "node": "Store Cleaning Flags",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Cleaning Flags": {
       "main": [
         [
           {

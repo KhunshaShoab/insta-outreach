@@ -71,6 +71,7 @@ for (const item of $input.all()) {
     lead_id: row.lead_id,
     campaign_id: row.campaign_id,
     company_id: row.company_id,
+    cleaning_flags: row.cleaning_flags ?? {},
     lead,
     contact: row.decision_maker ? { full_name: row.decision_maker, title: row.decision_maker_title, role_category: row.decision_maker_role, email: row.decision_maker_email, linkedin_url: row.decision_maker_linkedin } : null,
     prompt: rendered.prompt,
@@ -107,7 +108,9 @@ for (const [index, item] of $input.all().entries()) {
 
   const ai = parsed.data;
   const scored = computeIcpScore({
-    lead: { ...context.lead, flags: { niche_hits: [] } },
+    // The cleaning stage's findings, not an empty placeholder - niche_fit is
+    // scored from the keyword hits it recorded.
+    lead: { ...context.lead, flags: context.cleaning_flags ?? {} },
     contact: context.contact,
     campaign,
     profile: SCORING_PROFILE,

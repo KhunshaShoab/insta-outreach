@@ -103,3 +103,20 @@ test('hard gates read from the profile and the campaign override together', () =
   const failures = checkHardGates({ instagram_handle: null, state: 'CA' }, null, campaign, scoringProfile);
   assert.ok(failures.includes('no_instagram'));
 });
+
+test('niche fit is scored from the keyword hits the cleaning stage recorded', () => {
+  const withHits = computeIcpScore({
+    lead: { ...goodMedspa, flags: { niche_hits: ['medspa', 'botox'] } },
+    contact: founderContact, campaign, profile: scoringProfile, ai: aiScores
+  });
+  const withoutHits = computeIcpScore({
+    lead: { ...goodMedspa, flags: {} },
+    contact: founderContact, campaign, profile: scoringProfile, ai: aiScores
+  });
+  assert.ok(
+    withHits.components.niche_fit.score > withoutHits.components.niche_fit.score,
+    'recorded keyword hits must raise niche fit - otherwise the cleaning stage did its work for nothing'
+  );
+  assert.match(withHits.components.niche_fit.note, /keyword hits: medspa, botox/);
+  assert.ok(withHits.icp_score > withoutHits.icp_score);
+});

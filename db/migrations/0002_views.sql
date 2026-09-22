@@ -54,6 +54,8 @@ select
   l.followup_step,
   l.retry_count,
   l.last_error,
+  l.cleaning_flags,
+  co.ig_last_post_at,
   l.discovered_at,
   l.notes,
   l.sheets_synced_at,

@@ -82,8 +82,16 @@ return out;
     notes: 'Only the niche tagging. The cleaning flags travel on the advance_lead detail into the activity log - writing them here would overwrite companies.raw, which holds the provider payload.'
   }), { column: 6, row: 0 });
 
+  const storeFlags = wf.add(supabase('Store Cleaning Flags', {
+    method: 'PATCH',
+    path: 'leads',
+    query: '?id=eq.{{ $json.lead_id }}',
+    body: '={{ JSON.stringify({ cleaning_flags: $json.flags }) }}',
+    notes: 'Niche keyword hits, personal-account signals and location reasoning. Qualification scores niche fit from these, so they must survive the cleaning run.'
+  }), { column: 7, row: 0 });
+
   const advanceKeep = wf.add(advance('Advance To CLEANED', 'CLEANED', 'NEW', 'clean.normalize_filter_dedupe',
-    '{ actor: "n8n:wf02", flags: $json.flags }'), { column: 7, row: 0 });
+    '{ actor: "n8n:wf02", flags: $(\'Apply Cleaning Rules\').item.json.flags }'), { column: 8, row: 0 });
 
   const markDropped = wf.add(supabase('Record Drop Reason', {
     method: 'PATCH',
@@ -97,7 +105,7 @@ return out;
 
   wf.chain(campaign, claimed, fetchCompany, clean, route);
   wf.connect([route, 0], persistFlags);
-  wf.connect(persistFlags, advanceKeep);
+  wf.chain(persistFlags, storeFlags, advanceKeep);
   wf.connect([route, 1], markDropped);
   wf.connect(markDropped, advanceDrop);
 

@@ -249,6 +249,10 @@ create table if not exists leads (
   outreach_angle       text,
   source               text,
   source_search_term   text,
+  -- What the cleaning stage worked out: niche keyword hits, personal-account
+  -- signals, location reasoning, blocked terms. Qualification scores niche fit
+  -- from these, so they have to outlive the cleaning run.
+  cleaning_flags       jsonb not null default '{}'::jsonb,
   discovered_at        timestamptz not null default now(),
   cleaned_at           timestamptz,
   enriched_at          timestamptz,
