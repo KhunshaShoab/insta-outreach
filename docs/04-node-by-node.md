@@ -28,7 +28,7 @@ Discover businesses for a campaign and land them at stage SCRAPED.
 | Normalise + Dedupe Batch | Code | inlines `lib/normalize.js`, `lib/dedupe.js` | - | In-memory deduplication. The database is the second wall - resolve_company() matches on the same identity keys. |
 | Resolve Company (dedupe) | HTTP Request | db: `resolve_company()` | retry x3 | Returns the existing company when any identity key matches, otherwise creates one. Every key seen is recorded, so a later hit on ANY of them lands on the same row. |
 | Suppressed? | HTTP Request | db: `is_suppressed()` | retry x3 | Opt-outs and do-not-contact are checked before a lead is ever created. |
-| Not Suppressed | IF |  | - |  |
+| Not Suppressed | IF |  | - | Suppressed businesses never become leads. An ambiguous response is treated as not suppressed, and the unique constraints downstream still prevent duplicates. |
 | Create Lead (SCRAPED) | HTTP Request | db: `upsert_lead()` | retry x3 | unique(campaign_id, company_id) guarantees a business is never queued twice inside one campaign. |
 | Skip Suppressed | No Op |  | - |  |
 | Summarise Batch | Code | inline logic | - |  |
@@ -75,7 +75,7 @@ Normalise, filter and de-duplicate scraped leads.
 | Fetch Company Record | HTTP Request | db: `GET companies` | retry x3 | One read per claimed lead. Swap for a single ?id=in.(...) read if batch sizes grow beyond a few hundred. |
 | Apply Cleaning Rules | Code | inlines `lib/normalize.js`, `lib/clean.js`, `lib/dedupe.js` | - | Rules come from config/cleaning.json, inlined at build time. Edit that file and rebuild to change what is filtered - no node edits. |
 | Keep or Drop | Switch |  | - |  |
-| Store Cleaning Flags | HTTP Request | db: `PATCH companies` | retry x3, continues on fail |  |
+| Tag Company With Niche | HTTP Request | db: `PATCH companies` | retry x3, continues on fail | Only the niche tagging. The cleaning flags travel on the advance_lead detail into the activity log - writing them here would overwrite companies.raw, which holds the provider payload. |
 | Advance To CLEANED | HTTP Request | db: `advance_lead()` | retry x3 |  |
 | Record Drop Reason | HTTP Request | db: `PATCH leads` | retry x3 |  |
 | Advance To DISQUALIFIED | HTTP Request | db: `advance_lead()` | retry x3 |  |
@@ -92,9 +92,9 @@ Claim SCRAPED Leads -> Fetch Company Record
 Fetch Company Record (output 0) -> Apply Cleaning Rules
 Fetch Company Record (output 1) -> Classify Failure
 Apply Cleaning Rules -> Keep or Drop
-Keep or Drop (output 0) -> Store Cleaning Flags
+Keep or Drop (output 0) -> Tag Company With Niche
 Keep or Drop (output 1) -> Record Drop Reason
-Store Cleaning Flags -> Advance To CLEANED
+Tag Company With Niche -> Advance To CLEANED
 Record Drop Reason -> Advance To DISQUALIFIED
 Classify Failure -> Record Failure
 ```

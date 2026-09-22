@@ -328,7 +328,7 @@
           "conditions": [
             {
               "id": "c1",
-              "leftValue": "={{ $json === false || $json.is_suppressed === false }}",
+              "leftValue": "={{ ($json?.data ?? $json?.is_suppressed ?? $json) !== true }}",
               "rightValue": "",
               "operator": {
                 "type": "boolean",
@@ -347,7 +347,8 @@
       "position": [
         2420,
         300
-      ]
+      ],
+      "notes": "Suppressed businesses never become leads. An ambiguous response is treated as not suppressed, and the unique constraints downstream still prevent duplicates."
     },
     {
       "parameters": {

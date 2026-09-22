@@ -73,12 +73,13 @@ return out;
     { name: 'drop', value: 'DROP' }
   ]), { column: 5, row: 0 });
 
-  const persistFlags = wf.add(supabase('Store Cleaning Flags', {
+  const persistFlags = wf.add(supabase('Tag Company With Niche', {
     method: 'PATCH',
     path: 'companies',
     query: '?id=eq.{{ $json.company_id }}',
-    body: `={{ JSON.stringify({ niche_id: $('Load Campaign + Niche').first().json.niche_id, business_model: $('Load Campaign + Niche').first().json.niche?.business_model, raw: { cleaning_flags: $json.flags } }) }}`,
-    continueOnFail: true
+    body: `={{ JSON.stringify({ niche_id: $('Load Campaign + Niche').first().json.niche_id, business_model: $('Load Campaign + Niche').first().json.niche?.business_model }) }}`,
+    continueOnFail: true,
+    notes: 'Only the niche tagging. The cleaning flags travel on the advance_lead detail into the activity log - writing them here would overwrite companies.raw, which holds the provider payload.'
   }), { column: 6, row: 0 });
 
   const advanceKeep = wf.add(advance('Advance To CLEANED', 'CLEANED', 'NEW', 'clean.normalize_filter_dedupe',

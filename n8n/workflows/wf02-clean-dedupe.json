@@ -295,7 +295,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ niche_id: $('Load Campaign + Niche').first().json.niche_id, business_model: $('Load Campaign + Niche').first().json.niche?.business_model, raw: { cleaning_flags: $json.flags } }) }}",
+        "jsonBody": "={{ JSON.stringify({ niche_id: $('Load Campaign + Niche').first().json.niche_id, business_model: $('Load Campaign + Niche').first().json.niche?.business_model }) }}",
         "options": {
           "timeout": 30000,
           "response": {
@@ -305,8 +305,8 @@
           }
         }
       },
-      "id": "08ddfef3a0fcd41bcf416a38",
-      "name": "Store Cleaning Flags",
+      "id": "c20bd598d7151a31c06dbe89",
+      "name": "Tag Company With Niche",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -322,7 +322,8 @@
       "onError": "continueRegularOutput",
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "notes": "Only the niche tagging. The cleaning flags travel on the advance_lead detail into the activity log - writing them here would overwrite companies.raw, which holds the provider payload."
     },
     {
       "parameters": {
@@ -632,7 +633,7 @@
       "main": [
         [
           {
-            "node": "Store Cleaning Flags",
+            "node": "Tag Company With Niche",
             "type": "main",
             "index": 0
           }
@@ -646,7 +647,7 @@
         ]
       ]
     },
-    "Store Cleaning Flags": {
+    "Tag Company With Niche": {
       "main": [
         [
           {

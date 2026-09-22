@@ -118,9 +118,13 @@ return unique.map((lead) => ({ json: {
   }), { column: 8, row: 0 });
 
   const gate = wf.add(ifNode('Not Suppressed', {
-    left: '={{ $json === false || $json.is_suppressed === false }}',
+    // A scalar RPC response arrives as `false`, `{ data: false }` or
+    // `{ is_suppressed: false }` depending on how the response is wrapped.
+    // Proceed unless suppression is explicitly true, so an unreadable answer
+    // never silently skips a lead.
+    left: '={{ ($json?.data ?? $json?.is_suppressed ?? $json) !== true }}',
     operator: { type: 'boolean', operation: 'true', singleValue: true }
-  }), { column: 9, row: 0 });
+  }, { notes: 'Suppressed businesses never become leads. An ambiguous response is treated as not suppressed, and the unique constraints downstream still prevent duplicates.' }), { column: 9, row: 0 });
 
   const upsert = wf.add(rpc('Create Lead (SCRAPED)', 'upsert_lead', `={{ JSON.stringify({
     p_campaign_id: $('Normalise + Dedupe Batch').item.json.campaign_id,
