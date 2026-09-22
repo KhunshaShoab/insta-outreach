@@ -1,0 +1,659 @@
+{
+  "name": "wf08-outreach-log",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9,11,14,16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "f6ace855d08a4098d5b17cc2",
+      "name": "Release Window",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "optiflow/release",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "4612b3b7fa27da614034cf6b",
+      "name": "Release On Demand",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        490
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?status=eq.active&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "07d7c891bf1e4060464884a8",
+      "name": "Load Active Campaigns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/outreach?sent_at=gte.{{ new Date(new Date().setHours(0,0,0,0)).toISOString() }}&select=id,campaign_id,kind",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "7b1c9372d34093478c47c783",
+      "name": "Count Sent Today",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The daily cap is enforced against what was actually sent, not what was queued."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/v_send_queue?select=*&limit=200",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "aa6ca6b57586c61be8158c53",
+      "name": "Read Send Queue",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/followups.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Follow-up scheduling.\n// One rule dominates: a reply at any stage stops the sequence. That is enforced\n// in three places - here, in the follow-up workflow's guard, and in a database\n// trigger - because getting it wrong means messaging someone who already\n// answered.\n// ---------------------------------------------------------------------------\n\nconst STOP_STATUSES = ['REPLIED', 'INTERESTED', 'NOT_INTERESTED', 'NURTURE', 'CLOSED', 'OPTED_OUT'];\nconst FOLLOWUP_KINDS = ['followup_1', 'followup_2', 'followup_3_final'];\n\n/** Should the sequence keep running for this lead? */\nfunction shouldStopSequence(lead = {}) {\n  if (lead.replied_at) return { stop: true, reason: 'reply_received' };\n  if (STOP_STATUSES.includes(lead.status)) return { stop: true, reason: `status_${String(lead.status).toLowerCase()}` };\n  if (['REPLIED', 'CONVERSATION', 'INTERESTED', 'NURTURE', 'NOT_INTERESTED', 'CLOSED'].includes(lead.stage)) {\n    return { stop: true, reason: `stage_${String(lead.stage).toLowerCase()}` };\n  }\n  if (lead.suppressed) return { stop: true, reason: 'suppressed' };\n  return { stop: false, reason: null };\n}\n\n/** Day offsets for a campaign, falling back to the global default. */\nfunction offsetsFor(campaign, defaults) {\n  const fromCampaign = campaign?.followups?.day_offsets;\n  if (Array.isArray(fromCampaign) && fromCampaign.length) return fromCampaign;\n  return (defaults?.steps ?? []).filter((s) => s.step > 0).map((s) => s.day_offset);\n}\n\n/**\n * Build the schedule for a lead whose initial DM was just sent.\n * @returns [{ step, kind, due_at }]\n */\nfunction buildSchedule(sentAt, campaign, defaults) {\n  if (campaign?.followups?.enabled === false) return [];\n  const offsets = offsetsFor(campaign, defaults);\n  const window = campaign?.followups?.send_window ?? defaults?.send_window;\n  const base = sentAt instanceof Date ? sentAt : new Date(sentAt);\n  return offsets.slice(0, FOLLOWUP_KINDS.length).map((days, i) => {\n    const due = new Date(base.getTime() + days * 86400000);\n    return {\n      step: i + 1,\n      kind: FOLLOWUP_KINDS[i],\n      day_offset: days,\n      due_at: nextSendSlot(due, window).toISOString()\n    };\n  });\n}\n\n/**\n * Move a timestamp to the next allowed sending slot.\n * Interpreted in the campaign's timezone by the caller - here we work on the\n * date object's local-equivalent parts supplied in `window`.\n */\nfunction nextSendSlot(date, window) {\n  if (!window) return date;\n  const out = new Date(date.getTime());\n  const days = window.days ?? [1, 2, 3, 4, 5];\n  const start = window.start_hour ?? 9;\n  const end = window.end_hour ?? 18;\n\n  for (let guard = 0; guard < 14; guard += 1) {\n    const dow = out.getUTCDay();\n    const hour = out.getUTCHours();\n    if (!days.includes(dow)) {\n      out.setUTCDate(out.getUTCDate() + 1);\n      out.setUTCHours(start, 0, 0, 0);\n      continue;\n    }\n    if (hour < start) { out.setUTCHours(start, 0, 0, 0); return out; }\n    if (hour >= end) {\n      out.setUTCDate(out.getUTCDate() + 1);\n      out.setUTCHours(start, 0, 0, 0);\n      continue;\n    }\n    return out;\n  }\n  return out;\n}\n\n/** The step config (intent, char limit) for a given follow-up kind. */\nfunction stepConfig(kind, defaults) {\n  return (defaults?.steps ?? []).find((s) => s.kind === kind) ?? null;\n}\n\n/**\n * Daily release gate. The queue never hands out more than the campaign allows,\n * so a backlog cannot turn into a burst.\n */\nfunction applyDailyLimits(items, { sentToday = 0, limit = 30 } = {}) {\n  const remaining = Math.max(0, limit - sentToday);\n  return { release: items.slice(0, remaining), held: items.slice(remaining), remaining };\n}\n\n/** What happens once the final follow-up went out without a reply. */\nfunction afterFinal(defaults) {\n  return defaults?.after_final ?? { status: 'NO_RESPONSE', move_to_stage: 'NURTURE', nurture_recheck_days: 90 };\n}\n\n// ---- node logic ----\nconst FOLLOWUP_DEFAULTS = {\"version\":1,\"note\":\"Follow-up cadence. Every interval is configurable per campaign (campaign.followups overrides this file). A reply at ANY step cancels every pending follow-up for that lead - enforced in lib/followups.js and by a DB trigger in db/migrations/0003_functions.sql.\",\"timezone\":\"America/Los_Angeles\",\"send_window\":{\"start_hour\":9,\"end_hour\":18,\"days\":[1,2,3,4,5]},\"stop_on_reply\":true,\"stop_on_statuses\":[\"REPLIED\",\"INTERESTED\",\"NOT_INTERESTED\",\"NURTURE\",\"CLOSED\",\"OPTED_OUT\"],\"max_followups\":3,\"steps\":[{\"step\":0,\"day_offset\":0,\"kind\":\"initial\",\"label\":\"Initial DM\",\"prompt\":\"05-outreach-message\",\"intent\":\"Open a conversation with one specific observation and one relevant question.\"},{\"step\":1,\"day_offset\":2,\"kind\":\"followup_1\",\"label\":\"Follow-up #1 - short continuation\",\"prompt\":\"06-followup-message\",\"intent\":\"One or two lines that continue the original thought. Never 'just following up'. Re-state the specific observation in different words and make replying take five seconds.\",\"max_chars\":300},{\"step\":2,\"day_offset\":5,\"kind\":\"followup_2\",\"label\":\"Follow-up #2 - business observation / value\",\"prompt\":\"06-followup-message\",\"intent\":\"Add something they did not have before: a concrete observation about how similar brands in their niche handle this, or a number from comparable work. No pitch deck, no service list.\",\"max_chars\":450},{\"step\":3,\"day_offset\":9,\"kind\":\"followup_3_final\",\"label\":\"Final follow-up - close the loop\",\"prompt\":\"06-followup-message\",\"intent\":\"Respectful close-the-loop. Acknowledge the timing may be wrong, leave the door open, ask nothing more than a yes/no. This is the last automated touch.\",\"max_chars\":300,\"final\":true}],\"after_final\":{\"status\":\"NO_RESPONSE\",\"move_to_stage\":\"NURTURE\",\"nurture_recheck_days\":90},\"rate_limits\":{\"note\":\"Human-operated sending pace. The queue will not release more than this many messages per day per sending account.\",\"max_new_dms_per_day\":30,\"max_followups_per_day\":40,\"min_seconds_between_sends\":45}};\n\nconst campaigns = ($('Load Active Campaigns').first().json || []);\nconst sent = ($('Count Sent Today').first().json || []);\nconst queued = ($input.first().json || []);\n\nconst byCampaign = new Map();\nfor (const c of Array.isArray(campaigns) ? campaigns : [campaigns]) byCampaign.set(c.id, c);\n\nconst sentCounts = {};\nfor (const row of Array.isArray(sent) ? sent : []) {\n  sentCounts[row.campaign_id] ??= { initial: 0, followup: 0 };\n  if (row.kind === 'initial') sentCounts[row.campaign_id].initial += 1;\n  else sentCounts[row.campaign_id].followup += 1;\n}\n\nconst released = [];\nconst held = [];\n\nfor (const campaignId of new Set((Array.isArray(queued) ? queued : []).map((q) => q.campaign_id))) {\n  const campaign = byCampaign.get(campaignId) || {};\n  const limits = campaign.followups?.rate_limits ?? FOLLOWUP_DEFAULTS.rate_limits;\n  const items = queued.filter((q) => q.campaign_id === campaignId);\n\n  const initials = items.filter((i) => i.kind === 'initial');\n  const followups = items.filter((i) => i.kind !== 'initial');\n\n  const initialGate = applyDailyLimits(initials, {\n    sentToday: sentCounts[campaignId]?.initial ?? 0,\n    limit: campaign.outreach?.daily_outreach_target ?? limits.max_new_dms_per_day\n  });\n  const followupGate = applyDailyLimits(followups, {\n    sentToday: sentCounts[campaignId]?.followup ?? 0,\n    limit: limits.max_followups_per_day\n  });\n\n  const mode = campaign.outreach?.sending_mode ?? 'manual';\n  for (const item of [...initialGate.release, ...followupGate.release]) {\n    released.push({ ...item, send_mode: mode, min_seconds_between_sends: limits.min_seconds_between_sends ?? 45 });\n  }\n  held.push(...initialGate.held, ...followupGate.held);\n}\n\nif (!released.length) {\n  return [{ json: { released: 0, held: held.length, note: 'Daily cap reached or nothing approved.', items: [] } }];\n}\nreturn released.map((item) => ({ json: { ...item, released_total: released.length, held_total: held.length } }));\n"
+      },
+      "id": "8117ccd7a312af60ea1c388b",
+      "name": "Apply Daily Caps + Pacing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        300
+      ],
+      "notes": "Caps come from the campaign, falling back to config/followups.default.json. Overflow is held for the next window, never dropped."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.send_mode || \"manual\" }}",
+                    "rightValue": "manual",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "manual"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.send_mode || \"manual\" }}",
+                    "rightValue": "graph_api",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "graph_api"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "751080fd6397e3745417c758",
+      "name": "Sending Mode",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1460,
+        300
+      ],
+      "notes": "manual is the default and the only compliant path for a first-touch DM."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\n// Everything the operator needs in one place: who, the profile link, the exact\n// approved text, and the pacing to respect. The send itself is theirs; the\n// console calls wf07 /mark-sent afterwards.\nreturn $input.all().map((item) => {\n  const row = item.json;\n  return { json: {\n    outreach_id: row.outreach_id,\n    lead_id: row.lead_id,\n    lead_ref: row.public_ref,\n    business_name: row.business_name,\n    instagram_handle: row.instagram_handle,\n    profile_url: row.instagram_url || (row.instagram_handle ? 'https://www.instagram.com/' + row.instagram_handle + '/' : null),\n    direct_url: row.instagram_handle ? 'https://www.instagram.com/direct/new/?username=' + row.instagram_handle : null,\n    target_contact: row.target_contact,\n    kind: row.kind,\n    message: row.message_to_send,\n    approved_by: row.approved_by,\n    approved_at: row.approved_at,\n    icp_score: row.icp_score,\n    priority: row.priority,\n    pacing_seconds: row.min_seconds_between_sends,\n    instructions: 'Open the profile, paste the message, send it, then press \"Mark as sent\".'\n  } };\n});\n"
+      },
+      "id": "24fc5db5a7f6b4201bde2e3d",
+      "name": "Prepare Operator Work Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPERATOR_WEBHOOK_URL || \"https://example.invalid/noop\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.released_total + \" approved message(s) ready to send\", items: $input.all().map(i => i.json) }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e467099567b4f326603d7ade",
+      "name": "Notify Operator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "Optional: Slack/email/anything. Leave OPERATOR_WEBHOOK_URL unset to skip - the console polls the send queue anyway."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v21.0/{{ $env.IG_BUSINESS_ACCOUNT_ID }}/messages?access_token={{ $env.IG_PAGE_ACCESS_TOKEN }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ recipient: { id: $json.recipient_igsid }, message: { text: $json.message_to_send } }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "1c2b08e5f4ddd1628070878f",
+      "name": "Send Via Instagram Graph API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        490
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "Only valid INSIDE an open conversation window - i.e. for replies to someone who messaged first. A first-touch DM has no recipient_igsid and is routed to the manual path instead."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.recipient_igsid ? \"open\" : \"cold\" }}",
+                    "rightValue": "open",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "open"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.recipient_igsid ? \"open\" : \"cold\" }}",
+                    "rightValue": "cold",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "cold"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "1c5a6a55103a1541c97f2143",
+      "name": "Conversation Already Open?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1460,
+        490
+      ],
+      "notes": "Without an open conversation the API cannot deliver a cold DM. The item falls back to a human."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/mark_outreach_sent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_outreach_id: $json.outreach_id, p_sent_by: \"n8n:wf08\", p_send_mode: \"graph_api\", p_external_message_id: $json.message_id ?? null }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "f6f6157032085aeda8012f4e",
+      "name": "Log Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        490
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, released: $input.all().length } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "96a7b2b236191bb9780cb965",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2180,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Release Window": {
+      "main": [
+        [
+          {
+            "node": "Load Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release On Demand": {
+      "main": [
+        [
+          {
+            "node": "Load Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Active Campaigns": {
+      "main": [
+        [
+          {
+            "node": "Count Sent Today",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count Sent Today": {
+      "main": [
+        [
+          {
+            "node": "Read Send Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Send Queue": {
+      "main": [
+        [
+          {
+            "node": "Apply Daily Caps + Pacing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Daily Caps + Pacing": {
+      "main": [
+        [
+          {
+            "node": "Sending Mode",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sending Mode": {
+      "main": [
+        [
+          {
+            "node": "Prepare Operator Work Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Conversation Already Open?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Operator Work Items": {
+      "main": [
+        [
+          {
+            "node": "Notify Operator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Operator": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Already Open?": {
+      "main": [
+        [
+          {
+            "node": "Send Via Instagram Graph API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Operator Work Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Via Instagram Graph API": {
+      "main": [
+        [
+          {
+            "node": "Log Send",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Operator Work Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Send": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "outreach"
+    },
+    {
+      "name": "logging"
+    }
+  ],
+  "meta": {
+    "description": "Release approved messages within the daily cap and log every send.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "3091c669c6d8023660b5c757"
+}

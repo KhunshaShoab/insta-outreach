@@ -1,0 +1,710 @@
+{
+  "name": "wf13-orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 6-20 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "39abfd24ad5a46796b401b8e",
+      "name": "Pipeline Tick",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "optiflow/run",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "8cd80feabd9c6cb3090f9cdc",
+      "name": "Run Now",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        490
+      ],
+      "notes": "Body: { campaign_id?, stages?: [\"discovery\",\"clean\",...] }. Omit both to run every active campaign end to end."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?status=eq.active&select=*&order=created_at.asc",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "c7f16c1bc0a9b952f8dfb610",
+      "name": "Load Active Campaigns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/stages.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// The pipeline state machine, mirrored from the lead_stages table.\n// Keeping it here too lets workflows compute the next stage without a round\n// trip, and lets tests assert the ordering.\n// ---------------------------------------------------------------------------\n\nconst STAGES = [\n  // `workflow` is the workflow that PROCESSES leads sitting at this stage and\n  // moves them onward - the same value claim_leads() is called with.\n  { stage: 'SCRAPED',            position: 10,  label: 'Scraped',            workflow: 'wf02-clean-dedupe' },\n  { stage: 'CLEANED',            position: 20,  label: 'Cleaned',            workflow: 'wf03-enrichment' },\n  { stage: 'ENRICHED',           position: 30,  label: 'Enriched',           workflow: 'wf04-qualification' },\n  { stage: 'QUALIFIED',          position: 40,  label: 'AI Qualified',       workflow: 'wf05-research' },\n  { stage: 'RESEARCHED',         position: 50,  label: 'AI Research',        workflow: 'wf06-outreach-generation' },\n  { stage: 'MESSAGE_GENERATED',  position: 60,  label: 'Message Generated',  workflow: 'wf07-approval-queue' },\n  { stage: 'PENDING_APPROVAL',   position: 70,  label: 'Pending Approval',   workflow: 'wf07-approval-queue' },\n  { stage: 'READY_FOR_OUTREACH', position: 80,  label: 'Ready For Outreach', workflow: 'wf08-outreach-log' },\n  { stage: 'DM_SENT',            position: 90,  label: 'DM Sent',            workflow: 'wf11-followup-engine' },\n  { stage: 'REPLIED',            position: 100, label: 'Replied',            workflow: 'wf09-reply-processing' },\n  { stage: 'CONVERSATION',       position: 110, label: 'Conversation',       workflow: 'wf10-response-assistant' },\n  { stage: 'INTERESTED',         position: 120, label: 'Interested',         workflow: 'wf10-response-assistant' },\n  { stage: 'NURTURE',            position: 130, label: 'Nurture',            workflow: 'wf11-followup-engine' },\n  { stage: 'NOT_INTERESTED',     position: 140, label: 'Not Interested',     terminal: true },\n  { stage: 'CLOSED',             position: 150, label: 'Closed',             terminal: true },\n  { stage: 'DISQUALIFIED',       position: 160, label: 'Disqualified',       terminal: true }\n];\n\nconst BY_NAME = new Map(STAGES.map((s) => [s.stage, s]));\n\n/** The linear \"happy path\" the orchestrator walks. */\nconst PIPELINE = [\n  'SCRAPED', 'CLEANED', 'ENRICHED', 'QUALIFIED', 'RESEARCHED',\n  'MESSAGE_GENERATED', 'PENDING_APPROVAL', 'READY_FOR_OUTREACH', 'DM_SENT'\n];\n\nfunction stageInfo(stage) {\n  return BY_NAME.get(stage) ?? null;\n}\n\nfunction position(stage) {\n  return BY_NAME.get(stage)?.position ?? -1;\n}\n\nfunction isTerminal(stage) {\n  return Boolean(BY_NAME.get(stage)?.terminal);\n}\n\n/** Next stage on the happy path, or null at the end / off the path. */\nfunction nextStage(stage) {\n  const i = PIPELINE.indexOf(stage);\n  return i === -1 || i === PIPELINE.length - 1 ? null : PIPELINE[i + 1];\n}\n\n/** Which workflow is responsible for moving a lead out of this stage. */\nfunction workflowFor(stage) {\n  return BY_NAME.get(stage)?.workflow ?? null;\n}\n\n/** Stage never moves backwards - the guard used by advance_lead(). */\nfunction canAdvance(from, to) {\n  return position(to) >= position(from);\n}\n\n/**\n * Resume point for a lead after a crash: the stage whose work has not been\n * completed, derived from the timestamps rather than trusting `status`.\n */\nfunction resumeStage(lead = {}) {\n  if (!lead.cleaned_at) return 'CLEANED';\n  if (!lead.enriched_at) return 'ENRICHED';\n  if (!lead.qualified_at) return 'QUALIFIED';\n  if (lead.qualified === false) return null;\n  if (!lead.researched_at) return 'RESEARCHED';\n  if (!lead.message_generated_at) return 'MESSAGE_GENERATED';\n  if (!lead.approved_at) return 'PENDING_APPROVAL';\n  if (!lead.first_sent_at) return 'READY_FOR_OUTREACH';\n  return null;\n}\n\n/** Progress checklist for the dashboard / \"Lead 182\" view. */\nfunction progressOf(lead = {}) {\n  return [\n    { step: 'Scraped', done: Boolean(lead.discovered_at) },\n    { step: 'Cleaned', done: Boolean(lead.cleaned_at) },\n    { step: 'Enriched', done: Boolean(lead.enriched_at) },\n    { step: 'Qualified', done: Boolean(lead.qualified_at) },\n    { step: 'AI Research', done: Boolean(lead.researched_at) },\n    { step: 'Message Generated', done: Boolean(lead.message_generated_at) },\n    { step: 'Approved', done: Boolean(lead.approved_at) },\n    { step: 'Sent', done: Boolean(lead.first_sent_at) },\n    { step: 'Replied', done: Boolean(lead.replied_at) }\n  ];\n}\n\n// ---- node logic ----\n// Discovery is expensive and rate-limited, so it runs on its own schedule;\n// every other stage runs on every tick and simply finds nothing to do when the\n// queue at that stage is empty.\nconst body = $('Run Now').isExecuted ? ($('Run Now').first().json.body ?? {}) : {};\nconst rows = $input.first().json;\nconst campaigns = Array.isArray(rows) ? rows : [rows];\nconst selected = body.campaign_id ? campaigns.filter((c) => c.id === body.campaign_id) : campaigns;\n\nconst hour = new Date().getUTCHours();\nconst out = [];\n\nfor (const campaign of selected) {\n  if (!campaign || !campaign.id) continue;\n  const discoveryHour = Number((campaign.schedule?.discovery_cron ?? '0 6 * * 1-5').split(' ')[1]) || 6;\n  const stages = body.stages ?? [\n    ...(hour === discoveryHour ? ['discovery'] : []),\n    'clean', 'enrich', 'qualify', 'research', 'generate', 'release', 'followups'\n  ];\n\n  out.push({ json: {\n    campaign_id: campaign.id,\n    campaign_name: campaign.name,\n    batch_size: body.batch_size ?? 25,\n    stages,\n    pipeline: PIPELINE,\n    tick_started_at: new Date().toISOString()\n  } });\n}\n\nif (!out.length) return [{ json: { campaign_id: null, stages: [], note: 'No active campaigns' } }];\nreturn out;\n"
+      },
+      "id": "a2ec5e7ba18e9c1fc841df5a",
+      "name": "Plan This Tick",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        300
+      ],
+      "notes": "Stage selection is data, not wiring: pass { stages: [\"qualify\"] } to the webhook to re-run one stage for one campaign."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ Boolean($json.campaign_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cef19c083a56e1fae193d8a9",
+      "name": "Any Active Campaign?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        980,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "6e47dc99b0d2d4a5fde10259",
+      "name": "Nothing To Run",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1220,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "6417adb557d23e3652b8a98a",
+      "name": "For Each Campaign",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf01-lead-discovery",
+          "mode": "list",
+          "cachedResultName": "wf01-lead-discovery"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "4c059f07a19150ccb852f781",
+      "name": "1. Discovery",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1460,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf01-lead-discovery\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf02-clean-dedupe",
+          "mode": "list",
+          "cachedResultName": "wf02-clean-dedupe"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ed9cf17c3655812e7ef98bb9",
+      "name": "2. Clean + Dedupe",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1700,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf02-clean-dedupe\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf03-enrichment",
+          "mode": "list",
+          "cachedResultName": "wf03-enrichment"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "48dd62e32cca8e6eba323a72",
+      "name": "3. Enrichment",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1940,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf03-enrichment\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf04-qualification",
+          "mode": "list",
+          "cachedResultName": "wf04-qualification"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b19bf27f5673ac121f14c05a",
+      "name": "4. Qualification",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2180,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf04-qualification\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf05-research",
+          "mode": "list",
+          "cachedResultName": "wf05-research"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "debdf5bffb009a1abd2f5a80",
+      "name": "5. Research",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2420,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf05-research\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf06-outreach-generation",
+          "mode": "list",
+          "cachedResultName": "wf06-outreach-generation"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "4578d550aee21baec2e7c982",
+      "name": "6. Outreach Generation",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2660,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf06-outreach-generation\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf08-outreach-log",
+          "mode": "list",
+          "cachedResultName": "wf08-outreach-log"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "6f8e7461c52ce0a86119fa8e",
+      "name": "8. Release Approved",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2900,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf08-outreach-log\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "wf11-followup-engine",
+          "mode": "list",
+          "cachedResultName": "wf11-followup-engine"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "execution_id": "={{ $execution.id }}"
+          }
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "24513bb912b03aec6944b4da",
+      "name": "11. Follow-ups",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3140,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Runs \"wf11-followup-engine\". continueOnFail is deliberate: one failing stage must not stop the campaign."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\n// Each Execute Workflow node continues on failure, so this sees whatever each\n// stage produced - success or the error it reported.\nconst stages = ['1. Discovery','2. Clean + Dedupe','3. Enrichment','4. Qualification','5. Research','6. Outreach Generation','8. Release Approved','11. Follow-ups'];\nconst results = [];\nlet failed = 0;\n\nfor (const name of stages) {\n  let outcome = { stage: name, ran: false, ok: null, error: null };\n  try {\n    const node = $(name);\n    if (node.isExecuted) {\n      const first = node.first().json ?? {};\n      outcome = { stage: name, ran: true, ok: !first.error, error: first.error ? String(first.error).slice(0, 300) : null };\n      if (first.error) failed += 1;\n    }\n  } catch (error) {\n    outcome = { stage: name, ran: false, ok: false, error: String(error.message ?? error).slice(0, 300) };\n    failed += 1;\n  }\n  results.push(outcome);\n}\n\nconst context = $('Plan This Tick').first().json;\nreturn [{ json: {\n  workflow: 'wf13-orchestrator',\n  campaign_id: context.campaign_id,\n  execution_id: $execution.id,\n  status: failed ? 'PARTIAL' : 'SUCCESS',\n  items_in: results.length,\n  items_ok: results.filter((r) => r.ok).length,\n  items_failed: failed,\n  cursor: { stages: results, tick_started_at: context.tick_started_at },\n  finished_at: new Date().toISOString()\n} }];\n"
+      },
+      "id": "c635135a34ce127daf6b171f",
+      "name": "Record Tick Outcome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3380,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/workflow_runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n      workflow: $json.workflow,\n      campaign_id: $json.campaign_id,\n      execution_id: $json.execution_id,\n      status: $json.status,\n      items_in: $json.items_in,\n      items_ok: $json.items_ok,\n      items_failed: $json.items_failed,\n      cursor: $json.cursor,\n      finished_at: $json.finished_at\n    }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "1dc697680aa569f8b0729243",
+      "name": "Store Run Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3620,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Resume evidence: which stages ran, which failed, and where the tick stopped."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, status: $json.status, stages: $json.cursor.stages } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "f0720d1caf408748cb271f39",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3860,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Pipeline Tick": {
+      "main": [
+        [
+          {
+            "node": "Load Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Now": {
+      "main": [
+        [
+          {
+            "node": "Load Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Active Campaigns": {
+      "main": [
+        [
+          {
+            "node": "Plan This Tick",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan This Tick": {
+      "main": [
+        [
+          {
+            "node": "Any Active Campaign?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Active Campaign?": {
+      "main": [
+        [
+          {
+            "node": "For Each Campaign",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing To Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "For Each Campaign": {
+      "main": [
+        [
+          {
+            "node": "Record Tick Outcome",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Discovery": {
+      "main": [
+        [
+          {
+            "node": "2. Clean + Dedupe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Clean + Dedupe": {
+      "main": [
+        [
+          {
+            "node": "3. Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Enrichment": {
+      "main": [
+        [
+          {
+            "node": "4. Qualification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Qualification": {
+      "main": [
+        [
+          {
+            "node": "5. Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Research": {
+      "main": [
+        [
+          {
+            "node": "6. Outreach Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Outreach Generation": {
+      "main": [
+        [
+          {
+            "node": "8. Release Approved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8. Release Approved": {
+      "main": [
+        [
+          {
+            "node": "11. Follow-ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11. Follow-ups": {
+      "main": [
+        [
+          {
+            "node": "For Each Campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Tick Outcome": {
+      "main": [
+        [
+          {
+            "node": "Store Run Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Run Record": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "orchestrator"
+    }
+  ],
+  "meta": {
+    "description": "Campaign settings -> discovery -> cleaning -> enrichment -> qualification -> research -> outreach generation -> approval -> release -> follow-ups.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "bce2b512a38719a0a3164332"
+}

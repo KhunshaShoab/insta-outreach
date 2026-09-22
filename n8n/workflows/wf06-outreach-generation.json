@@ -1,0 +1,800 @@
+{
+  "name": "wf06-outreach-generation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/20 6-20 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "a7d43ae98ea52809123dc19c",
+      "name": "Every 20 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "3ae877ca4ca313e823421689",
+      "name": "Called By Orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        490
+      ],
+      "notes": "Input: { campaign_id, batch_size?, execution_id? }"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?id=eq.{{ $json.campaign_id || $env.DEFAULT_CAMPAIGN_ID }}&select=*,niche:niches(*)",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "8ec62edbc39dc0c9f3e1eeeb",
+      "name": "Load Campaign + Niche",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "One read per run. Campaign settings - ICP band, thresholds, daily targets, follow-up offsets - all come from here, never from node parameters."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/claim_leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_campaign_id: $json.id || $json.campaign_id, p_stage: 'RESEARCHED', p_limit: $json.batch_size || 25, p_worker: 'wf06-outreach-generation', p_stale_minutes: 20, p_max_retries: 3 }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "bb4cc96de07a8c61c984906c",
+      "name": "Claim RESEARCHED Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "SELECT ... FOR UPDATE SKIP LOCKED, so parallel executions never hand the same lead to two workers. A claim older than 20 minutes is treated as abandoned and reissued, which is how a crashed run resumes instead of stranding leads at RESEARCHED."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/v_leads_full?lead_id=eq.{{ $json.id }}&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "7e69e6a1516e7e8eab89dcf9",
+      "name": "Fetch Lead + Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/research?lead_id=eq.{{ $json[0].lead_id || $json.lead_id }}&select=*&order=created_at.desc&limit=1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "b9f12cb0a3ac8921aaf60d39",
+      "name": "Fetch Research Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/prompts.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Prompt loading and rendering.\n// Prompts live in prompts/*.md as plain text with front matter, so they can be\n// reviewed and diffed like code. n8n/build.mjs inlines them into the workflow\n// JSON at build time; Node tooling reads them from disk.\n//\n// Placeholders:\n//   {{name}}        required string - rendering throws if it is missing\n//   {{name?}}       optional - renders as \"(not available)\" when missing\n//   {{json:name}}   pretty-printed JSON block\n//   {{list:name}}   array rendered as \"- item\" lines\n// ---------------------------------------------------------------------------\n\nconst PLACEHOLDER = /\\{\\{\\s*(json:|list:)?([a-zA-Z0-9_.]+)(\\?)?\\s*\\}\\}/g;\n\n/** Split `---` front matter from the prompt body. */\nfunction parseFrontMatter(text) {\n  const raw = String(text);\n  if (!raw.startsWith('---')) return { meta: {}, body: raw.trim() };\n  const end = raw.indexOf('\\n---', 3);\n  if (end === -1) return { meta: {}, body: raw.trim() };\n\n  const meta = {};\n  for (const line of raw.slice(3, end).split('\\n')) {\n    const match = line.match(/^\\s*([a-z_]+)\\s*:\\s*(.+?)\\s*$/i);\n    if (!match) continue;\n    const [, key, value] = match;\n    meta[key] = /^\\d+(\\.\\d+)?$/.test(value) ? Number(value)\n      : value === 'true' ? true\n      : value === 'false' ? false\n      : value.replace(/^[\"']|[\"']$/g, '');\n  }\n  return { meta, body: raw.slice(end + 4).trim() };\n}\n\nfunction lookup(vars, path) {\n  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), vars);\n}\n\n/** Fill a prompt template. Throws on a missing required variable. */\nfunction renderTemplate(template, vars = {}) {\n  const missing = [];\n  const out = String(template).replace(PLACEHOLDER, (_match, kind, name, optional) => {\n    const value = lookup(vars, name);\n    const absent = value === undefined || value === null || value === '';\n\n    if (absent) {\n      if (!optional) { missing.push(name); return ''; }\n      return kind === 'json:' ? '{}' : kind === 'list:' ? '- (none)' : '(not available)';\n    }\n    if (kind === 'json:') return JSON.stringify(value, null, 2);\n    if (kind === 'list:') {\n      const items = Array.isArray(value) ? value : [value];\n      return items.length ? items.map((v) => `- ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\\n') : '- (none)';\n    }\n    return Array.isArray(value) ? value.join(', ') : String(value);\n  });\n\n  if (missing.length) {\n    throw new Error(`renderTemplate: missing required variables: ${[...new Set(missing)].join(', ')}`);\n  }\n  return out;\n}\n\n/** Variables a template expects, for validation and documentation. */\nfunction templateVariables(template) {\n  const required = new Set();\n  const optional = new Set();\n  for (const match of String(template).matchAll(PLACEHOLDER)) {\n    (match[3] ? optional : required).add(match[2]);\n  }\n  return { required: [...required], optional: [...optional] };\n}\n\n/**\n * Render a prompt from a registry entry.\n * @param {object} prompt { meta, body } as produced by parseFrontMatter\n */\nfunction renderPrompt(prompt, vars = {}) {\n  const body = renderTemplate(prompt.body ?? prompt, vars);\n  return {\n    prompt: body,\n    model: prompt.meta?.model ?? 'default',\n    max_tokens: prompt.meta?.max_tokens ?? 2000,\n    temperature: prompt.meta?.temperature ?? 0.2,\n    schema_name: prompt.meta?.schema ?? null,\n    version: prompt.meta?.version ?? '1'\n  };\n}\n\n// ---- lib/angles.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Outreach angle selection.\n// Each niche ships its own angle list (config/niches.json). The AI picks one\n// and justifies it; this module validates that choice against the niche and\n// provides a deterministic fallback so a bad model response can never produce\n// a generic \"we are a leading BPO\" message.\n// ---------------------------------------------------------------------------\n\n/** All angles defined for a niche. */\nfunction anglesFor(niche) {\n  return (niche?.outreach_angles ?? []).map((a) => ({ ...a }));\n}\n\nfunction angleById(niche, id) {\n  return anglesFor(niche).find((a) => a.id === id) ?? null;\n}\n\n/**\n * Deterministic pick, used as the fallback and as a sanity check on the AI.\n * Signals come from the enriched lead and the research brief.\n */\nfunction pickAngle(niche, { lead = {}, research = {}, campaign = {} } = {}) {\n  const override = campaign?.outreach?.angle_override;\n  if (override) {\n    const forced = angleById(niche, override);\n    if (forced) return { angle: forced, reason: 'campaign angle_override', source: 'campaign' };\n  }\n\n  const angles = anglesFor(niche);\n  if (!angles.length) return { angle: null, reason: 'niche has no angles configured', source: 'none' };\n\n  const text = [\n    lead.bio, lead.website_description, lead.category,\n    ...(lead.products_services ?? []),\n    research.business_summary, research.instagram_focus,\n    ...(research.operational_pain_points ?? []).map((p) => (typeof p === 'string' ? p : p?.pain ?? '')),\n    ...(research.cx_needs ?? []).map((p) => (typeof p === 'string' ? p : p?.need ?? ''))\n  ].filter(Boolean).join(' ').toLowerCase();\n\n  const scored = angles.map((angle) => {\n    let score = 0;\n    const words = `${angle.label} ${angle.hook} ${angle.when ?? ''}`.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 4);\n    for (const w of new Set(words)) if (text.includes(w)) score += 1;\n    // Angle-specific signals that matter more than word overlap.\n    if (angle.id === 'after_hours' && /after hours|24\\/7|weekend|evening|closed/.test(text)) score += 3;\n    if (angle.id === 'speed_to_lead' && /dm (us|for)|message us|inquir|pricing/.test(text)) score += 3;\n    if (angle.id === 'order_questions' && /order|shipping|tracking|delivery/.test(text)) score += 3;\n    if (angle.id === 'sizing_questions' && /size|sizing|fit|measurement/.test(text)) score += 3;\n    if (angle.id === 'returns' && /return|exchange|refund/.test(text)) score += 3;\n    if (angle.id === 'technical_questions' && /setup|troubleshoot|firmware|app|install|compatib/.test(text)) score += 3;\n    if (angle.id === 'warranty' && /warranty|rma|repair|after[- ]sales/.test(text)) score += 3;\n    if (angle.id === 'growth_support' && /growing|scal|launch|drop|sold out|restock/.test(text)) score += 2;\n    return { angle, score };\n  }).sort((a, b) => b.score - a.score);\n\n  const best = scored[0];\n  if (!best.score) {\n    return { angle: angles[0], reason: 'no strong signal - defaulted to the niche primary angle', source: 'default' };\n  }\n  return { angle: best.angle, reason: `matched ${best.score} signal(s) in the business profile`, source: 'signals' };\n}\n\n/**\n * Validate an AI-chosen angle. Returns the angle to actually use.\n * An unknown id never breaks the run - it falls back to the deterministic pick.\n */\nfunction resolveAngle(niche, aiAngleId, context) {\n  const fromAi = aiAngleId ? angleById(niche, aiAngleId) : null;\n  if (fromAi) return { angle: fromAi, reason: 'selected by the qualification/research step', source: 'ai' };\n  const fallback = pickAngle(niche, context);\n  return { ...fallback, source: aiAngleId ? 'fallback_unknown_ai_angle' : fallback.source, rejected_ai_angle: aiAngleId ?? null };\n}\n\n// ---- node logic ----\nconst PROMPT = {\n  \"meta\": {\n    \"id\": \"outreach_message\",\n    \"version\": \"1.0.0\",\n    \"model\": \"heavy\",\n    \"max_tokens\": 1600,\n    \"temperature\": 0.7,\n    \"schema\": \"outreach_message\"\n  },\n  \"body\": \"ROLE\\n\\nYou are the outreach writer for OptiFlow Solutions. You write first-touch Instagram DMs that start conversations with business owners and operators.\\n\\nYou are not writing an advertisement. You are writing the kind of message a thoughtful person sends after actually looking at someone's business for two minutes.\\n\\nINPUT\\n\\nWho you are writing to\\n- Business: {{lead.business_name}} (@{{lead.instagram_handle}})\\n- Address them as: {{decision_maker.address_as?}}\\n- Their role: {{decision_maker.contact_role?}}\\n- Niche: {{niche.name}} ({{niche.business_model}})\\n- Location: {{lead.city?}}, {{lead.state?}}\\n\\nWhat you know about them\\n- Summary: {{research.business_summary}}\\n- What they sell: {{research.what_they_sell?}}\\n- Their Instagram focus: {{research.instagram_focus?}}\\n- Specific observations you may open with:\\n{{list:research.specific_observations}}\\n- Their likely pain points:\\n{{list:research.operational_pain_points}}\\n- CX needs:\\n{{list:research.cx_needs}}\\n\\nThe angle to use\\n- Angle: {{angle.label}} ({{angle.id}})\\n- The hook for this angle: {{angle.hook}}\\n- Relevant OptiFlow capability: {{research.recommended_service}}\\n- Why OptiFlow is relevant here: {{research.why_optiflow_relevant}}\\n\\nConstraints\\n- Maximum characters per message: {{constraints.max_chars}}\\n- Sender: {{sender.name}} from {{sender.company}}\\n\\nTASK\\n\\nWrite THREE variations of the same first message:\\n\\n1. \\\"conversational\\\" - how you would message a peer. Relaxed, direct, contractions are fine. 2-4 short lines.\\n2. \\\"professional\\\" - same content, slightly more formal. Still warm, still short. Suitable for clinics and established practices.\\n3. \\\"concise\\\" - under 250 characters. One observation, one question. Nothing else.\\n\\nEvery variation must:\\n- open with something specific and true about THEIR business, taken from the observations above;\\n- connect that to ONE relevant problem or capability - never a list of services;\\n- end with ONE easy question that is genuinely easy to answer;\\n- read like a human wrote it.\\n\\nQUALIFICATION RULES\\n\\nNever write:\\n- \\\"Hi, we are a leading BPO company...\\\" or any variant that opens with who OptiFlow is;\\n- a list of services, or more than one capability;\\n- generic compliments: \\\"love your page\\\", \\\"your content is amazing\\\", \\\"you guys are crushing it\\\";\\n- fake familiarity: \\\"I've been following you for a while\\\", \\\"I'm a huge fan\\\";\\n- corporate filler: \\\"I hope this message finds you well\\\", \\\"I wanted to reach out\\\", \\\"synergy\\\", \\\"solutions provider\\\", \\\"leverage\\\", \\\"streamline your operations\\\";\\n- AI tells: \\\"In today's fast-paced world\\\", \\\"As a business owner, you know\\\", em-dash-heavy constructions, three-part lists of adjectives;\\n- pressure: \\\"quick call this week?\\\", \\\"when are you free?\\\", \\\"let me know ASAP\\\", urgency framing, scarcity framing;\\n- more than one emoji across the whole message, and none at all unless the brand's own tone clearly invites it;\\n- any claim about their business you cannot support from the input - no invented numbers, no invented customers, no invented reviews;\\n- any promise about results, pricing or headcount.\\n\\nAlways:\\n- use their first name only if `address_as` is provided; otherwise open with the observation;\\n- use \\\"you/your\\\", not \\\"your company\\\";\\n- keep sentences short. If a sentence runs past about 20 words, split it;\\n- ask a question they can answer in one line, about how they currently handle something - not a meeting request;\\n- stay under the character limit including spaces;\\n- avoid gendered pronouns entirely.\\n\\nOUTPUT FORMAT\\n\\nReturn ONLY a JSON object. No prose, no markdown fence.\\n\\nJSON SCHEMA\\n\\n{\\n  \\\"variations\\\": [\\n    { \\\"variation\\\": \\\"conversational\\\", \\\"message\\\": \\\"...\\\", \\\"char_count\\\": 0 },\\n    { \\\"variation\\\": \\\"professional\\\",   \\\"message\\\": \\\"...\\\", \\\"char_count\\\": 0 },\\n    { \\\"variation\\\": \\\"concise\\\",        \\\"message\\\": \\\"...\\\", \\\"char_count\\\": 0 }\\n  ],\\n  \\\"recommended_variation\\\": \\\"conversational|professional|concise\\\",\\n  \\\"recommendation_reason\\\": \\\"one sentence on why this variation suits this business\\\",\\n  \\\"outreach_angle\\\": \\\"the angle id used\\\",\\n  \\\"personalisation_used\\\": [\\\"the exact facts you opened with\\\"],\\n  \\\"self_check\\\": {\\n    \\\"opens_with_specific_detail\\\": true|false,\\n    \\\"no_service_list\\\": true|false,\\n    \\\"ends_with_one_question\\\": true|false,\\n    \\\"under_max_chars\\\": true|false,\\n    \\\"no_banned_phrases\\\": true|false\\n  }\\n}\\n\\nSet every self_check field honestly. If any is false, rewrite before responding.\\n\\nEDGE CASES\\n\\n- No name available (`address_as` is null): open with the observation. Never write \\\"Hi there\\\" or \\\"Hey!\\\" alone, and never guess a name.\\n- Observations are thin: use the single strongest one and ask a more open question. A short honest message beats a padded one.\\n- The business already mentions a support team: acknowledge it and ask about coverage gaps instead of implying they have no support.\\n- Medical or dental practice: no claims about patients, outcomes or compliance. Keep it about inquiry handling and admin load.\\n- The brand's tone is playful: match it in the conversational variation only. Keep the professional variation neutral.\\n- The business posts in another language: write in that language for the conversational variation if you are confident, and note it in recommendation_reason. Otherwise write in English.\\n- If the angle and the observations do not support each other, use the observation and note the mismatch in recommendation_reason - the human reviewer decides.\"\n};\n\nconst campaign = $('Load Campaign + Niche').first().json;\nconst niche = campaign.niche || {};\nconst leads = $('Fetch Lead + Research').all().map((i) => Array.isArray(i.json) ? i.json[0] : i.json);\nconst out = [];\n\nfor (const [index, item] of $input.all().entries()) {\n  const research = (Array.isArray(item.json) ? item.json[0] : item.json) || {};\n  const row = leads[index] || leads[0];\n  if (!row || !row.lead_id) continue;\n\n  const resolved = resolveAngle(niche, research.recommended_angle || row.outreach_angle, {\n    lead: { bio: row.bio, products_services: row.products_services },\n    research,\n    campaign\n  });\n  const angle = resolved.angle || { id: 'general', label: 'General', hook: 'how they currently handle inbound customer questions' };\n\n  const rendered = renderPrompt(PROMPT, {\n    lead: {\n      business_name: row.business_name,\n      instagram_handle: row.instagram_handle,\n      city: row.city,\n      state: row.state\n    },\n    niche,\n    decision_maker: {\n      address_as: row.decision_maker ? String(row.decision_maker).split(' ')[0] : null,\n      contact_role: row.decision_maker_title\n    },\n    research: {\n      business_summary: research.business_summary || row.business_summary || 'No research brief available.',\n      what_they_sell: research.what_they_sell,\n      instagram_focus: research.instagram_focus,\n      specific_observations: research.specific_observations || [],\n      operational_pain_points: research.operational_pain_points || [],\n      cx_needs: research.cx_needs || [],\n      recommended_service: research.recommended_service || row.recommended_service,\n      why_optiflow_relevant: research.why_optiflow_relevant || 'Not recorded.'\n    },\n    angle,\n    constraints: { max_chars: campaign.outreach?.max_chars ?? 500 },\n    sender: { name: $env.OPTIFLOW_SENDER_NAME || 'Alex', company: 'OptiFlow Solutions' }\n  });\n\n  out.push({ json: {\n    lead_id: row.lead_id,\n    campaign_id: row.campaign_id,\n    company_id: row.company_id,\n    contact_id: row.contact_id ?? null,\n    angle_id: angle.id,\n    angle_source: resolved.source,\n    max_chars: campaign.outreach?.max_chars ?? 500,\n    wanted_variations: campaign.outreach?.variations ?? ['conversational', 'professional', 'concise'],\n    default_variation: campaign.outreach?.default_variation ?? 'conversational',\n    prompt: rendered.prompt,\n    model: campaign.outreach?.model || $env.ANTHROPIC_MODEL_HEAVY || 'claude-opus-5',\n    max_tokens: rendered.max_tokens,\n    temperature: rendered.temperature,\n    prompt_version: rendered.version\n  } });\n}\nreturn out;\n"
+      },
+      "id": "473d4458a99635f123cdaf9d",
+      "name": "Render Outreach Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, temperature: $json.temperature, messages: [{ role: 'user', content: $json.prompt }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "3b682c0fef858fd0c79c3f6c",
+      "name": "Claude: Write DM Variations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api-key",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/validate.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Minimal JSON Schema validator (draft-07 subset).\n// Deliberately dependency-free: it runs unchanged inside an n8n Code node,\n// where npm packages are not available by default. Supports the keywords the\n// AI output schemas in schemas/ actually use.\n// ---------------------------------------------------------------------------\n\nconst TYPE_CHECKS = {\n  object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v),\n  array: Array.isArray,\n  string: (v) => typeof v === 'string',\n  number: (v) => typeof v === 'number' && Number.isFinite(v),\n  integer: (v) => Number.isInteger(v),\n  boolean: (v) => typeof v === 'boolean',\n  null: (v) => v === null\n};\n\nfunction typeMatches(value, type) {\n  if (Array.isArray(type)) return type.some((t) => typeMatches(value, t));\n  const check = TYPE_CHECKS[type];\n  return check ? check(value) : true;\n}\n\n/**\n * @returns {{ valid: boolean, errors: string[] }}\n */\nfunction validate(value, schema, path = '$') {\n  const errors = [];\n  if (!schema || typeof schema !== 'object') return { valid: true, errors };\n\n  if (schema.type && !typeMatches(value, schema.type)) {\n    errors.push(`${path}: expected ${Array.isArray(schema.type) ? schema.type.join('|') : schema.type}, got ${describe(value)}`);\n    return { valid: false, errors };\n  }\n\n  if (schema.enum && !schema.enum.includes(value)) {\n    errors.push(`${path}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`);\n  }\n  if (schema.const !== undefined && value !== schema.const) {\n    errors.push(`${path}: must equal ${JSON.stringify(schema.const)}`);\n  }\n\n  if (typeof value === 'string') {\n    if (schema.minLength != null && value.length < schema.minLength) errors.push(`${path}: shorter than ${schema.minLength}`);\n    if (schema.maxLength != null && value.length > schema.maxLength) errors.push(`${path}: longer than ${schema.maxLength} (${value.length})`);\n    if (schema.pattern && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: does not match /${schema.pattern}/`);\n  }\n\n  if (typeof value === 'number') {\n    if (schema.minimum != null && value < schema.minimum) errors.push(`${path}: below minimum ${schema.minimum}`);\n    if (schema.maximum != null && value > schema.maximum) errors.push(`${path}: above maximum ${schema.maximum}`);\n  }\n\n  if (Array.isArray(value)) {\n    if (schema.minItems != null && value.length < schema.minItems) errors.push(`${path}: needs at least ${schema.minItems} items`);\n    if (schema.maxItems != null && value.length > schema.maxItems) errors.push(`${path}: at most ${schema.maxItems} items`);\n    if (schema.items) {\n      value.forEach((item, i) => {\n        errors.push(...validate(item, schema.items, `${path}[${i}]`).errors);\n      });\n    }\n    if (schema.uniqueItems) {\n      const seen = new Set(value.map((v) => JSON.stringify(v)));\n      if (seen.size !== value.length) errors.push(`${path}: items must be unique`);\n    }\n  }\n\n  if (TYPE_CHECKS.object(value)) {\n    for (const key of schema.required ?? []) {\n      if (!(key in value) || value[key] === undefined) errors.push(`${path}.${key}: required property missing`);\n    }\n    for (const [key, sub] of Object.entries(schema.properties ?? {})) {\n      if (key in value && value[key] !== undefined) {\n        errors.push(...validate(value[key], sub, `${path}.${key}`).errors);\n      }\n    }\n    if (schema.additionalProperties === false) {\n      const allowed = new Set(Object.keys(schema.properties ?? {}));\n      for (const key of Object.keys(value)) {\n        if (!allowed.has(key)) errors.push(`${path}.${key}: unexpected property`);\n      }\n    }\n  }\n\n  return { valid: errors.length === 0, errors };\n}\n\nfunction assertValid(value, schema, label = 'payload') {\n  const { valid, errors } = validate(value, schema);\n  if (!valid) {\n    const error = new Error(`${label} failed schema validation: ${errors.slice(0, 8).join('; ')}`);\n    error.name = 'SchemaValidationError';\n    error.errors = errors;\n    throw error;\n  }\n  return value;\n}\n\nfunction describe(value) {\n  if (value === null) return 'null';\n  if (Array.isArray(value)) return 'array';\n  return typeof value;\n}\n\n// ---- lib/json.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Getting structured JSON back out of a language model, reliably.\n// The prompts all demand strict JSON, but a wrapper sentence or a fenced block\n// still shows up occasionally. This module recovers the object, validates it\n// against the schema, and tells the caller whether a retry is warranted -\n// nothing downstream ever sees half-parsed data.\n// ---------------------------------------------------------------------------\n\n/** Pull the first balanced JSON object/array out of a model response. */\nfunction extractJson(text) {\n  if (text == null) return null;\n  if (typeof text === 'object') return text;\n  const raw = String(text).trim();\n\n  const direct = tryParse(raw);\n  if (direct !== undefined) return direct;\n\n  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/i);\n  if (fenced) {\n    const parsed = tryParse(fenced[1].trim());\n    if (parsed !== undefined) return parsed;\n  }\n\n  const start = raw.search(/[{[]/);\n  if (start === -1) return null;\n  const opener = raw[start];\n  const closer = opener === '{' ? '}' : ']';\n  let depth = 0;\n  let inString = false;\n  let escaped = false;\n\n  for (let i = start; i < raw.length; i += 1) {\n    const ch = raw[i];\n    if (inString) {\n      if (escaped) escaped = false;\n      else if (ch === '\\\\') escaped = true;\n      else if (ch === '\"') inString = false;\n      continue;\n    }\n    if (ch === '\"') { inString = true; continue; }\n    if (ch === opener) depth += 1;\n    else if (ch === closer) {\n      depth -= 1;\n      if (depth === 0) {\n        const parsed = tryParse(raw.slice(start, i + 1));\n        if (parsed !== undefined) return parsed;\n        break;\n      }\n    }\n  }\n  return null;\n}\n\nfunction tryParse(text) {\n  try {\n    return JSON.parse(text);\n  } catch {\n    return undefined;\n  }\n}\n\n/**\n * Parse + validate a model response.\n * @returns {{ ok, data, errors, retry_prompt }}\n * `retry_prompt` is the exact correction to send back on a schema failure.\n */\nfunction parseAiJson(text, schema, { label = 'AI response' } = {}) {\n  const data = extractJson(text);\n  if (data === null) {\n    return {\n      ok: false,\n      data: null,\n      errors: [`${label}: no JSON object found in the response`],\n      retry_prompt: 'Your previous response was not valid JSON. Return ONLY the JSON object described in the OUTPUT FORMAT section, with no prose, no markdown fence and no explanation.'\n    };\n  }\n  if (!schema) return { ok: true, data, errors: [], retry_prompt: null };\n\n  const { valid, errors } = validate(data, schema);\n  if (valid) return { ok: true, data, errors: [], retry_prompt: null };\n\n  return {\n    ok: false,\n    data,\n    errors,\n    retry_prompt:\n      `Your previous response did not satisfy the required schema. Fix exactly these problems and return ONLY the corrected JSON object:\\n` +\n      errors.slice(0, 10).map((e) => `- ${e}`).join('\\n')\n  };\n}\n\n/** Deep-clone + drop undefined so the object is safe to store as jsonb. */\nfunction jsonSafe(value) {\n  return JSON.parse(JSON.stringify(value ?? null));\n}\n\n// ---- node logic ----\nconst MESSAGE_SCHEMA = {\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"$id\":\"optiflow/outreach_message\",\"title\":\"Personalised Instagram DM variations\",\"type\":\"object\",\"required\":[\"variations\",\"recommended_variation\",\"outreach_angle\",\"personalisation_used\",\"self_check\"],\"additionalProperties\":false,\"properties\":{\"variations\":{\"type\":\"array\",\"minItems\":2,\"maxItems\":3,\"items\":{\"type\":\"object\",\"required\":[\"variation\",\"message\"],\"additionalProperties\":false,\"properties\":{\"variation\":{\"type\":\"string\",\"enum\":[\"conversational\",\"professional\",\"concise\"]},\"message\":{\"type\":\"string\",\"minLength\":20,\"maxLength\":900},\"char_count\":{\"type\":\"number\",\"minimum\":0}}}},\"recommended_variation\":{\"type\":\"string\",\"enum\":[\"conversational\",\"professional\",\"concise\"]},\"recommendation_reason\":{\"type\":[\"string\",\"null\"],\"maxLength\":400},\"outreach_angle\":{\"type\":\"string\",\"minLength\":2,\"maxLength\":60},\"personalisation_used\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":8,\"items\":{\"type\":\"string\",\"maxLength\":400}},\"self_check\":{\"type\":\"object\",\"required\":[\"opens_with_specific_detail\",\"no_service_list\",\"ends_with_one_question\",\"under_max_chars\"],\"additionalProperties\":false,\"properties\":{\"opens_with_specific_detail\":{\"type\":\"boolean\"},\"no_service_list\":{\"type\":\"boolean\"},\"ends_with_one_question\":{\"type\":\"boolean\"},\"under_max_chars\":{\"type\":\"boolean\"},\"no_banned_phrases\":{\"type\":\"boolean\"}}}}};\n\n// Rules the model is told about in the prompt AND checked against here.\n// The prompt is instruction; this is enforcement.\nconst BANNED = [\n  'leading bpo', 'we are a leading', 'hope this message finds you well',\n  'i wanted to reach out', 'love your page', 'love your feed', 'your content is amazing',\n  'crushing it', 'i have been following', \"i've been following\", 'in today',\n  'synergy', 'leverage your', 'streamline your operations', 'solutions provider',\n  'quick call', 'when are you free', 'let me know asap', 'book a call',\n  'best regards', 'dear sir', 'dear madam', 'to whom it may concern'\n];\n\nconst inputs = $('Render Outreach Prompt').all().map((i) => i.json);\nconst out = [];\n\nfor (const [index, item] of $input.all().entries()) {\n  const context = inputs[index] ?? inputs[0];\n  const text = (item.json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\\n');\n  const parsed = parseAiJson(text, MESSAGE_SCHEMA, { label: 'outreach message' });\n\n  if (!parsed.ok) {\n    out.push({ json: { ...context, needs_repair: true, repair_prompt: context.prompt + '\\n\\n' + parsed.retry_prompt, schema_errors: parsed.errors } });\n    continue;\n  }\n\n  const data = parsed.data;\n  const checked = data.variations.map((v) => {\n    const message = String(v.message || '').trim();\n    const lower = message.toLowerCase();\n    const bannedHits = BANNED.filter((phrase) => lower.includes(phrase));\n    const emojiCount = (message.match(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}]/gu) || []).length;\n    const questionCount = (message.match(/\\?/g) || []).length;\n    return {\n      variation: v.variation,\n      message,\n      char_count: message.length,\n      issues: [\n        ...(bannedHits.length ? ['banned_phrase:' + bannedHits.join('|')] : []),\n        ...(message.length > context.max_chars ? ['over_max_chars'] : []),\n        ...(emojiCount > 1 ? ['too_many_emojis'] : []),\n        ...(questionCount === 0 ? ['no_question'] : []),\n        ...(questionCount > 2 ? ['too_many_questions'] : [])\n      ]\n    };\n  });\n\n  const clean = checked.filter((v) => v.issues.length === 0);\n  const recommended = clean.find((v) => v.variation === data.recommended_variation)\n    ?? clean.find((v) => v.variation === context.default_variation)\n    ?? clean[0]\n    ?? checked[0];\n\n  out.push({ json: {\n    ...context,\n    needs_repair: false,\n    variations: checked,\n    rejected_variations: checked.filter((v) => v.issues.length > 0),\n    chosen_variation: recommended.variation,\n    message: recommended.message,\n    char_count: recommended.char_count,\n    // A draft with issues still reaches the human - flagged, not silently sent\n    // and not silently dropped. The reviewer decides.\n    review_flags: recommended.issues,\n    personalisation: data.personalisation_used || [],\n    self_check: data.self_check || {},\n    usage: item.json.usage || {},\n    raw_response: text\n  } });\n}\nreturn out;\n"
+      },
+      "id": "26364c5399c5a439ad3ca16b",
+      "name": "Parse + Guardrails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        300
+      ],
+      "notes": "Character limits, banned phrases, emoji count and question count are enforced in code. A flagged draft still reaches the reviewer - it is never sent automatically and never silently discarded."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.needs_repair ? \"repair\" : \"ok\" }}",
+                    "rightValue": "ok",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "ok"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.needs_repair ? \"repair\" : \"ok\" }}",
+                    "rightValue": "repair",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "repair"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "d970c0688074d691a30c2d84",
+      "name": "Valid Message?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2180,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, temperature: 0, messages: [{ role: 'user', content: $json.repair_prompt }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "99fd51c2da369c29b2cc41c4",
+      "name": "Claude: Repair Message JSON",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        680
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api-key",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/outreach",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n      lead_id: $json.lead_id,\n      campaign_id: $json.campaign_id,\n      company_id: $json.company_id,\n      contact_id: $json.contact_id,\n      kind: 'initial',\n      followup_step: 0,\n      channel: 'instagram_dm',\n      variation: $json.chosen_variation,\n      variations: $json.variations,\n      message: $json.message,\n      char_count: $json.char_count,\n      outreach_angle: $json.angle_id,\n      personalisation: $json.personalisation,\n      status: 'PENDING_REVIEW',\n      model: $json.model,\n      prompt_version: $json.prompt_version,\n      notes: ($json.review_flags || []).length ? 'Review flags: ' + $json.review_flags.join(', ') : null\n    }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "c87802a9078b487200a9831a",
+      "name": "Queue Draft For Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Status PENDING_REVIEW. There is no path from this workflow to a sent message - approval is a separate, human step."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/advance_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id,\n    p_to_stage: \"PENDING_APPROVAL\",\n    p_status: \"PENDING_REVIEW\",\n    p_step: \"outreach.generate\",\n    p_detail: { actor: \"n8n:wf06\", variation: $json.chosen_variation, angle: $json.angle_id, flags: $json.review_flags },\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "f6d465c03e84ef2ed9a42a7f",
+      "name": "Advance To PENDING_APPROVAL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/retry.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Error classification, backoff and rate-limit handling.\n// Used by every node that talks to an external service. The contract is simple:\n// classify -> decide retry -> compute delay -> record. One failed lead never\n// stops a campaign, and a rate limit pauses only the provider that raised it.\n// ---------------------------------------------------------------------------\n\nconst ERROR_TYPES = ['rate_limit', 'timeout', 'auth', 'validation', 'provider_error', 'ai_schema', 'network', 'unknown'];\n\nconst RETRYABLE = new Set(['rate_limit', 'timeout', 'provider_error', 'network', 'ai_schema']);\n\n/** Map an HTTP status / thrown error onto one of ERROR_TYPES. */\nfunction classifyError(error = {}) {\n  const status = error.status ?? error.httpCode ?? error.statusCode ?? error.response?.status ?? null;\n  const message = String(error.message ?? error.error ?? error ?? '');\n\n  if (status === 429) return 'rate_limit';\n  if (status === 408 || /timeout|etimedout|esockettimedout|aborted/i.test(message)) return 'timeout';\n  if (status === 401 || status === 403) return 'auth';\n  if (status === 400 || status === 422) return 'validation';\n  if (status && status >= 500) return 'provider_error';\n  if (/econnreset|enotfound|econnrefused|socket hang up|network/i.test(message)) return 'network';\n  if (/schema|json|unexpected token|failed to parse/i.test(message)) return 'ai_schema';\n  if (/rate limit|too many requests|quota/i.test(message)) return 'rate_limit';\n  return 'unknown';\n}\n\nfunction isRetryable(errorType) {\n  return RETRYABLE.has(errorType);\n}\n\n/**\n * Exponential backoff with full jitter, honouring Retry-After when present.\n * 2s, 4s, 8s, 16s ... capped.\n */\nfunction backoffMs(attempt, { baseMs = 2000, capMs = 300000, retryAfterSeconds = null, jitter = true } = {}) {\n  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {\n    return Math.min(capMs, Number(retryAfterSeconds) * 1000);\n  }\n  const exponential = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));\n  if (!jitter) return exponential;\n  return Math.floor(exponential / 2 + Math.random() * (exponential / 2));\n}\n\nfunction retryAfterFrom(headers = {}) {\n  const raw = headers['retry-after'] ?? headers['Retry-After'] ?? headers['x-ratelimit-reset-after'];\n  if (raw == null) return null;\n  const seconds = Number(raw);\n  if (Number.isFinite(seconds)) return seconds;\n  const when = Date.parse(raw);\n  return Number.isFinite(when) ? Math.max(0, Math.round((when - Date.now()) / 1000)) : null;\n}\n\n/**\n * Decision object for a failed item.\n * `dead_letter` means: stop retrying, keep the row in `errors`, carry on with\n * the rest of the batch.\n */\nfunction decideRetry({ error, attempt = 1, maxRetries = 3, headers = {} } = {}) {\n  const errorType = classifyError(error);\n  const retryable = isRetryable(errorType);\n  const exhausted = attempt >= maxRetries;\n  return {\n    error_type: errorType,\n    retryable,\n    retry: retryable && !exhausted,\n    dead_letter: !retryable || exhausted,\n    delay_ms: retryable ? backoffMs(attempt, { retryAfterSeconds: retryAfterFrom(headers) }) : 0,\n    attempt,\n    max_retries: maxRetries,\n    reason: !retryable\n      ? `${errorType} is not retryable`\n      : exhausted\n        ? `retry budget exhausted after ${attempt} attempts`\n        : `retrying after backoff`\n  };\n}\n\n/** Wrap an async call with retries. Used by scripts; n8n uses its own node retry plus this classifier. */\nasync function withRetry(fn, { maxRetries = 3, onRetry = null, sleep = defaultSleep } = {}) {\n  let lastError;\n  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {\n    try {\n      return await fn(attempt);\n    } catch (error) {\n      lastError = error;\n      const decision = decideRetry({ error, attempt, maxRetries, headers: error?.headers ?? {} });\n      if (onRetry) onRetry(decision, error);\n      if (!decision.retry) break;\n      await sleep(decision.delay_ms);\n    }\n  }\n  throw lastError;\n}\n\nfunction defaultSleep(ms) {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\n/** Simple token-bucket guard so a workflow paces itself against a provider. */\nfunction rateLimiter({ perMinute = 60 } = {}) {\n  const intervalMs = 60000 / perMinute;\n  let nextAt = 0;\n  return {\n    async take(sleep = defaultSleep) {\n      const now = Date.now();\n      const wait = Math.max(0, nextAt - now);\n      nextAt = Math.max(now, nextAt) + intervalMs;\n      if (wait > 0) await sleep(wait);\n      return wait;\n    }\n  };\n}\n\n// ---- node logic ----\nconst out = [];\nfor (const item of $input.all()) {\n  const json = item.json || {};\n  const error = json.error || json.$error || json;\n  const status = error.status || error.httpCode || json.statusCode || null;\n  const decision = decideRetry({\n    error: { status, message: error.message || error.description || JSON.stringify(error).slice(0, 500) },\n    attempt: (json.retry_count || 0) + 1,\n    maxRetries: 3,\n    headers: json.headers || {}\n  });\n  out.push({ json: {\n    lead_id: json.lead_id ?? null,\n    campaign_id: json.campaign_id ?? null,\n    workflow: \"wf06-outreach-generation\",\n    provider: json.provider ?? null,\n    http_status: status,\n    error_type: decision.error_type,\n    error_message: error.message || String(error).slice(0, 500),\n    retryable: decision.retryable,\n    dead_letter: decision.dead_letter,\n    delay_ms: decision.delay_ms,\n    payload: { node: json.node ?? null, stage: json.stage ?? null }\n  } });\n}\nreturn out;\n"
+      },
+      "id": "faea40b9ee4a6e50bb2f304f",
+      "name": "Classify Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        870
+      ],
+      "notes": "Uses the same classifier as the test suite: 429 backs off, 5xx retries, 401/422 dead-letters immediately."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/fail_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id || null,\n    p_workflow: \"wf06-outreach-generation\",\n    p_error_type: $json.error_type || 'unknown',\n    p_message: String($json.error_message || $json.error || 'unknown error').slice(0, 2000),\n    p_node: \"Claude: Write DM Variations\",\n    p_provider: $json.provider || null,\n    p_http_status: $json.http_status || null,\n    p_payload: $json.payload || {},\n    p_max_retries: 3,\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "e2537d4fa4bcb6dfd3c7dcd9",
+      "name": "Record Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        870
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The failed-item queue. The lead returns to its stage with an incremented retry count and an exponential backoff; the rest of the batch is unaffected."
+    }
+  ],
+  "connections": {
+    "Every 20 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called By Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Campaign + Niche": {
+      "main": [
+        [
+          {
+            "node": "Claim RESEARCHED Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim RESEARCHED Leads": {
+      "main": [
+        [
+          {
+            "node": "Fetch Lead + Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Lead + Research": {
+      "main": [
+        [
+          {
+            "node": "Fetch Research Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Research Brief": {
+      "main": [
+        [
+          {
+            "node": "Render Outreach Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Outreach Prompt": {
+      "main": [
+        [
+          {
+            "node": "Claude: Write DM Variations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Write DM Variations": {
+      "main": [
+        [
+          {
+            "node": "Parse + Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + Guardrails": {
+      "main": [
+        [
+          {
+            "node": "Valid Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Message?": {
+      "main": [
+        [
+          {
+            "node": "Queue Draft For Approval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Claude: Repair Message JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Repair Message JSON": {
+      "main": [
+        [
+          {
+            "node": "Parse + Guardrails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Draft For Approval": {
+      "main": [
+        [
+          {
+            "node": "Advance To PENDING_APPROVAL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Failure": {
+      "main": [
+        [
+          {
+            "node": "Record Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "ai"
+    },
+    {
+      "name": "outreach"
+    }
+  ],
+  "meta": {
+    "description": "Generate personalised Instagram DM variations for researched leads.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "668d86707b2d0597a13e1434"
+}

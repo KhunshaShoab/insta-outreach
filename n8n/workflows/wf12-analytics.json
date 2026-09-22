@@ -1,0 +1,636 @@
+{
+  "name": "wf12-analytics",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "a69c3b4ece02e9346ce46283",
+      "name": "Daily Report",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "optiflow/report",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "50480d0d7b6c3b85adc58150",
+      "name": "Report On Demand",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        490
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?status=eq.active&select=id,name,mirror",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "5bb111acf722ce8fd9640472",
+      "name": "Load Active Campaigns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/daily_report",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_day: new Date().toISOString().slice(0,10), p_campaign_id: null }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "5d7a65cf7d160a35d4bca989",
+      "name": "Compute Daily Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "One SQL function returns every counter plus the niche/state/angle breakdowns. The model never recalculates them."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/prompts.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Prompt loading and rendering.\n// Prompts live in prompts/*.md as plain text with front matter, so they can be\n// reviewed and diffed like code. n8n/build.mjs inlines them into the workflow\n// JSON at build time; Node tooling reads them from disk.\n//\n// Placeholders:\n//   {{name}}        required string - rendering throws if it is missing\n//   {{name?}}       optional - renders as \"(not available)\" when missing\n//   {{json:name}}   pretty-printed JSON block\n//   {{list:name}}   array rendered as \"- item\" lines\n// ---------------------------------------------------------------------------\n\nconst PLACEHOLDER = /\\{\\{\\s*(json:|list:)?([a-zA-Z0-9_.]+)(\\?)?\\s*\\}\\}/g;\n\n/** Split `---` front matter from the prompt body. */\nfunction parseFrontMatter(text) {\n  const raw = String(text);\n  if (!raw.startsWith('---')) return { meta: {}, body: raw.trim() };\n  const end = raw.indexOf('\\n---', 3);\n  if (end === -1) return { meta: {}, body: raw.trim() };\n\n  const meta = {};\n  for (const line of raw.slice(3, end).split('\\n')) {\n    const match = line.match(/^\\s*([a-z_]+)\\s*:\\s*(.+?)\\s*$/i);\n    if (!match) continue;\n    const [, key, value] = match;\n    meta[key] = /^\\d+(\\.\\d+)?$/.test(value) ? Number(value)\n      : value === 'true' ? true\n      : value === 'false' ? false\n      : value.replace(/^[\"']|[\"']$/g, '');\n  }\n  return { meta, body: raw.slice(end + 4).trim() };\n}\n\nfunction lookup(vars, path) {\n  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), vars);\n}\n\n/** Fill a prompt template. Throws on a missing required variable. */\nfunction renderTemplate(template, vars = {}) {\n  const missing = [];\n  const out = String(template).replace(PLACEHOLDER, (_match, kind, name, optional) => {\n    const value = lookup(vars, name);\n    const absent = value === undefined || value === null || value === '';\n\n    if (absent) {\n      if (!optional) { missing.push(name); return ''; }\n      return kind === 'json:' ? '{}' : kind === 'list:' ? '- (none)' : '(not available)';\n    }\n    if (kind === 'json:') return JSON.stringify(value, null, 2);\n    if (kind === 'list:') {\n      const items = Array.isArray(value) ? value : [value];\n      return items.length ? items.map((v) => `- ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\\n') : '- (none)';\n    }\n    return Array.isArray(value) ? value.join(', ') : String(value);\n  });\n\n  if (missing.length) {\n    throw new Error(`renderTemplate: missing required variables: ${[...new Set(missing)].join(', ')}`);\n  }\n  return out;\n}\n\n/** Variables a template expects, for validation and documentation. */\nfunction templateVariables(template) {\n  const required = new Set();\n  const optional = new Set();\n  for (const match of String(template).matchAll(PLACEHOLDER)) {\n    (match[3] ? optional : required).add(match[2]);\n  }\n  return { required: [...required], optional: [...optional] };\n}\n\n/**\n * Render a prompt from a registry entry.\n * @param {object} prompt { meta, body } as produced by parseFrontMatter\n */\nfunction renderPrompt(prompt, vars = {}) {\n  const body = renderTemplate(prompt.body ?? prompt, vars);\n  return {\n    prompt: body,\n    model: prompt.meta?.model ?? 'default',\n    max_tokens: prompt.meta?.max_tokens ?? 2000,\n    temperature: prompt.meta?.temperature ?? 0.2,\n    schema_name: prompt.meta?.schema ?? null,\n    version: prompt.meta?.version ?? '1'\n  };\n}\n\n// ---- node logic ----\nconst PROMPT = {\n  \"meta\": {\n    \"id\": \"daily_report\",\n    \"version\": \"1.0.0\",\n    \"model\": \"default\",\n    \"max_tokens\": 1200,\n    \"temperature\": 0.2,\n    \"schema\": \"daily_report_summary\"\n  },\n  \"body\": \"ROLE\\n\\nYou write the narrative section of OptiFlow's daily Instagram outreach report. The numbers are already computed and are given to you - your job is to describe what they show, flag what deserves attention, and stay quiet when the data cannot support a conclusion.\\n\\nINPUT\\n\\nDate: {{report.day}}\\nCampaigns covered: {{report.campaigns}}\\n\\nMeasured metrics (already computed - do not recalculate, do not contradict):\\n{{json:report.metrics}}\\n\\nBreakdown by niche:\\n{{json:report.by_niche}}\\n\\nBreakdown by state:\\n{{json:report.by_state}}\\n\\nBreakdown by outreach angle:\\n{{json:report.by_angle}}\\n\\nReply categories seen:\\n{{json:report.reply_categories}}\\n\\nObjections seen:\\n{{json:report.objections}}\\n\\nErrors today:\\n{{json:report.errors}}\\n\\nTASK\\n\\nWrite the narrative sections of the report.\\n\\nQUALIFICATION RULES\\n\\n- Report what was measured. Do not declare a \\\"best\\\" or \\\"winning\\\" niche, state or angle. Present the measured rates and let the reader compare. If the operator has explicitly selected a metric to rank by, it will appear in report.metrics as `ranking_metric` - only then may you order things by it, and you must name the metric when you do.\\n- Never present a rate computed from a small denominator as a finding. Where fewer than 20 messages were sent in a segment, say the sample is too small to read and give the raw counts instead.\\n- `observations` must be things the data actually shows, each with the numbers attached.\\n- `questions_seen` and `objections_seen` should group the common themes with counts, not list every instance.\\n- `attention` is for things that need a human decision today: error spikes, approval backlogs, a campaign that sent nothing, follow-ups overdue.\\n- Do not speculate about causes. \\\"Reply rate on pet brands was 4.2% (3/71)\\\" is a finding. \\\"Pet brands respond better because they're smaller\\\" is not.\\n- Keep the whole narrative under 400 words.\\n\\nOUTPUT FORMAT\\n\\nReturn ONLY a JSON object.\\n\\nJSON SCHEMA\\n\\n{\\n  \\\"headline\\\": \\\"one sentence stating the day's throughput in numbers\\\",\\n  \\\"observations\\\": [\\\"each with the supporting numbers inline\\\"],\\n  \\\"segments_too_small_to_read\\\": [\\\"segments where the denominator is under 20\\\"],\\n  \\\"questions_seen\\\": [{ \\\"theme\\\": \\\"...\\\", \\\"count\\\": 0 }],\\n  \\\"objections_seen\\\": [{ \\\"theme\\\": \\\"...\\\", \\\"count\\\": 0 }],\\n  \\\"attention\\\": [{ \\\"issue\\\": \\\"...\\\", \\\"detail\\\": \\\"...\\\", \\\"suggested_action\\\": \\\"...\\\" }],\\n  \\\"notes_for_tomorrow\\\": [\\\"concrete, optional\\\"]\\n}\\n\\nEDGE CASES\\n\\n- A day with no sends: say so plainly, report what was discovered and queued instead, and put the reason under attention if the queue is empty or approvals are backed up.\\n- Metrics contain nulls (no denominator): report the raw counts and omit the rate entirely rather than printing 0%.\\n- Error count spikes: put it first in attention, with the dominant error_type and the affected provider.\\n- A campaign is paused: mention it once under notes_for_tomorrow; do not treat its zeroes as a finding.\"\n};\n\nconst raw = $input.first().json;\nconst metrics = Array.isArray(raw) ? raw[0] : raw;\nconst campaigns = ($('Load Active Campaigns').first().json || []);\n\n// Derived rates, computed here so the model is handed finished numbers.\nconst rate = (numerator, denominator) => denominator ? Math.round((numerator / denominator) * 1000) / 10 : null;\nconst summary = {\n  ...metrics,\n  qualification_rate: rate(metrics.leads_qualified, metrics.leads_evaluated),\n  reply_rate: rate(metrics.replies, metrics.messages_sent),\n  positive_reply_rate: rate(metrics.positive_replies, metrics.messages_sent),\n  approval_rate: rate(metrics.messages_approved, metrics.messages_generated),\n  // No ranking_metric is set, so the prompt is not permitted to name a winner.\n  ranking_metric: null\n};\n\nconst rendered = renderPrompt(PROMPT, {\n  report: {\n    day: metrics.day,\n    campaigns: (Array.isArray(campaigns) ? campaigns : [campaigns]).map((c) => c.name).join(', ') || 'all',\n    metrics: summary,\n    by_niche: metrics.by_niche ?? [],\n    by_state: metrics.by_state ?? [],\n    by_angle: metrics.by_angle ?? [],\n    reply_categories: metrics.reply_categories ?? [],\n    objections: metrics.objections ?? [],\n    errors: { open: metrics.errors_open ?? 0 }\n  }\n});\n\nreturn [{ json: {\n  day: metrics.day,\n  metrics: summary,\n  breakdowns: {\n    by_niche: metrics.by_niche ?? [],\n    by_state: metrics.by_state ?? [],\n    by_angle: metrics.by_angle ?? [],\n    reply_categories: metrics.reply_categories ?? [],\n    objections: metrics.objections ?? []\n  },\n  prompt: rendered.prompt,\n  model: $env.ANTHROPIC_MODEL || 'claude-sonnet-5',\n  max_tokens: rendered.max_tokens,\n  temperature: rendered.temperature\n} }];\n"
+      },
+      "id": "e42ad123a85abadf7bac1f71",
+      "name": "Prepare Report Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        300
+      ],
+      "notes": "ranking_metric stays null unless the operator picks one, which is what stops the report inventing a \"best niche\" from three replies."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, temperature: $json.temperature, messages: [{ role: 'user', content: $json.prompt }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "ae41db4bcd2d887d80e864d8",
+      "name": "Claude: Write Narrative",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api-key",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/validate.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Minimal JSON Schema validator (draft-07 subset).\n// Deliberately dependency-free: it runs unchanged inside an n8n Code node,\n// where npm packages are not available by default. Supports the keywords the\n// AI output schemas in schemas/ actually use.\n// ---------------------------------------------------------------------------\n\nconst TYPE_CHECKS = {\n  object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v),\n  array: Array.isArray,\n  string: (v) => typeof v === 'string',\n  number: (v) => typeof v === 'number' && Number.isFinite(v),\n  integer: (v) => Number.isInteger(v),\n  boolean: (v) => typeof v === 'boolean',\n  null: (v) => v === null\n};\n\nfunction typeMatches(value, type) {\n  if (Array.isArray(type)) return type.some((t) => typeMatches(value, t));\n  const check = TYPE_CHECKS[type];\n  return check ? check(value) : true;\n}\n\n/**\n * @returns {{ valid: boolean, errors: string[] }}\n */\nfunction validate(value, schema, path = '$') {\n  const errors = [];\n  if (!schema || typeof schema !== 'object') return { valid: true, errors };\n\n  if (schema.type && !typeMatches(value, schema.type)) {\n    errors.push(`${path}: expected ${Array.isArray(schema.type) ? schema.type.join('|') : schema.type}, got ${describe(value)}`);\n    return { valid: false, errors };\n  }\n\n  if (schema.enum && !schema.enum.includes(value)) {\n    errors.push(`${path}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`);\n  }\n  if (schema.const !== undefined && value !== schema.const) {\n    errors.push(`${path}: must equal ${JSON.stringify(schema.const)}`);\n  }\n\n  if (typeof value === 'string') {\n    if (schema.minLength != null && value.length < schema.minLength) errors.push(`${path}: shorter than ${schema.minLength}`);\n    if (schema.maxLength != null && value.length > schema.maxLength) errors.push(`${path}: longer than ${schema.maxLength} (${value.length})`);\n    if (schema.pattern && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: does not match /${schema.pattern}/`);\n  }\n\n  if (typeof value === 'number') {\n    if (schema.minimum != null && value < schema.minimum) errors.push(`${path}: below minimum ${schema.minimum}`);\n    if (schema.maximum != null && value > schema.maximum) errors.push(`${path}: above maximum ${schema.maximum}`);\n  }\n\n  if (Array.isArray(value)) {\n    if (schema.minItems != null && value.length < schema.minItems) errors.push(`${path}: needs at least ${schema.minItems} items`);\n    if (schema.maxItems != null && value.length > schema.maxItems) errors.push(`${path}: at most ${schema.maxItems} items`);\n    if (schema.items) {\n      value.forEach((item, i) => {\n        errors.push(...validate(item, schema.items, `${path}[${i}]`).errors);\n      });\n    }\n    if (schema.uniqueItems) {\n      const seen = new Set(value.map((v) => JSON.stringify(v)));\n      if (seen.size !== value.length) errors.push(`${path}: items must be unique`);\n    }\n  }\n\n  if (TYPE_CHECKS.object(value)) {\n    for (const key of schema.required ?? []) {\n      if (!(key in value) || value[key] === undefined) errors.push(`${path}.${key}: required property missing`);\n    }\n    for (const [key, sub] of Object.entries(schema.properties ?? {})) {\n      if (key in value && value[key] !== undefined) {\n        errors.push(...validate(value[key], sub, `${path}.${key}`).errors);\n      }\n    }\n    if (schema.additionalProperties === false) {\n      const allowed = new Set(Object.keys(schema.properties ?? {}));\n      for (const key of Object.keys(value)) {\n        if (!allowed.has(key)) errors.push(`${path}.${key}: unexpected property`);\n      }\n    }\n  }\n\n  return { valid: errors.length === 0, errors };\n}\n\nfunction assertValid(value, schema, label = 'payload') {\n  const { valid, errors } = validate(value, schema);\n  if (!valid) {\n    const error = new Error(`${label} failed schema validation: ${errors.slice(0, 8).join('; ')}`);\n    error.name = 'SchemaValidationError';\n    error.errors = errors;\n    throw error;\n  }\n  return value;\n}\n\nfunction describe(value) {\n  if (value === null) return 'null';\n  if (Array.isArray(value)) return 'array';\n  return typeof value;\n}\n\n// ---- lib/json.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Getting structured JSON back out of a language model, reliably.\n// The prompts all demand strict JSON, but a wrapper sentence or a fenced block\n// still shows up occasionally. This module recovers the object, validates it\n// against the schema, and tells the caller whether a retry is warranted -\n// nothing downstream ever sees half-parsed data.\n// ---------------------------------------------------------------------------\n\n/** Pull the first balanced JSON object/array out of a model response. */\nfunction extractJson(text) {\n  if (text == null) return null;\n  if (typeof text === 'object') return text;\n  const raw = String(text).trim();\n\n  const direct = tryParse(raw);\n  if (direct !== undefined) return direct;\n\n  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/i);\n  if (fenced) {\n    const parsed = tryParse(fenced[1].trim());\n    if (parsed !== undefined) return parsed;\n  }\n\n  const start = raw.search(/[{[]/);\n  if (start === -1) return null;\n  const opener = raw[start];\n  const closer = opener === '{' ? '}' : ']';\n  let depth = 0;\n  let inString = false;\n  let escaped = false;\n\n  for (let i = start; i < raw.length; i += 1) {\n    const ch = raw[i];\n    if (inString) {\n      if (escaped) escaped = false;\n      else if (ch === '\\\\') escaped = true;\n      else if (ch === '\"') inString = false;\n      continue;\n    }\n    if (ch === '\"') { inString = true; continue; }\n    if (ch === opener) depth += 1;\n    else if (ch === closer) {\n      depth -= 1;\n      if (depth === 0) {\n        const parsed = tryParse(raw.slice(start, i + 1));\n        if (parsed !== undefined) return parsed;\n        break;\n      }\n    }\n  }\n  return null;\n}\n\nfunction tryParse(text) {\n  try {\n    return JSON.parse(text);\n  } catch {\n    return undefined;\n  }\n}\n\n/**\n * Parse + validate a model response.\n * @returns {{ ok, data, errors, retry_prompt }}\n * `retry_prompt` is the exact correction to send back on a schema failure.\n */\nfunction parseAiJson(text, schema, { label = 'AI response' } = {}) {\n  const data = extractJson(text);\n  if (data === null) {\n    return {\n      ok: false,\n      data: null,\n      errors: [`${label}: no JSON object found in the response`],\n      retry_prompt: 'Your previous response was not valid JSON. Return ONLY the JSON object described in the OUTPUT FORMAT section, with no prose, no markdown fence and no explanation.'\n    };\n  }\n  if (!schema) return { ok: true, data, errors: [], retry_prompt: null };\n\n  const { valid, errors } = validate(data, schema);\n  if (valid) return { ok: true, data, errors: [], retry_prompt: null };\n\n  return {\n    ok: false,\n    data,\n    errors,\n    retry_prompt:\n      `Your previous response did not satisfy the required schema. Fix exactly these problems and return ONLY the corrected JSON object:\\n` +\n      errors.slice(0, 10).map((e) => `- ${e}`).join('\\n')\n  };\n}\n\n/** Deep-clone + drop undefined so the object is safe to store as jsonb. */\nfunction jsonSafe(value) {\n  return JSON.parse(JSON.stringify(value ?? null));\n}\n\n// ---- node logic ----\nconst REPORT_SCHEMA = {\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"$id\":\"optiflow/daily_report_summary\",\"title\":\"Daily report narrative\",\"type\":\"object\",\"required\":[\"headline\",\"observations\"],\"additionalProperties\":false,\"properties\":{\"headline\":{\"type\":\"string\",\"minLength\":10,\"maxLength\":300},\"observations\":{\"type\":\"array\",\"maxItems\":12,\"items\":{\"type\":\"string\",\"maxLength\":400}},\"segments_too_small_to_read\":{\"type\":\"array\",\"maxItems\":20,\"items\":{\"type\":\"string\",\"maxLength\":200}},\"questions_seen\":{\"type\":\"array\",\"maxItems\":12,\"items\":{\"type\":\"object\",\"required\":[\"theme\"],\"additionalProperties\":false,\"properties\":{\"theme\":{\"type\":\"string\",\"maxLength\":200},\"count\":{\"type\":\"number\",\"minimum\":0}}}},\"objections_seen\":{\"type\":\"array\",\"maxItems\":12,\"items\":{\"type\":\"object\",\"required\":[\"theme\"],\"additionalProperties\":false,\"properties\":{\"theme\":{\"type\":\"string\",\"maxLength\":200},\"count\":{\"type\":\"number\",\"minimum\":0}}}},\"attention\":{\"type\":\"array\",\"maxItems\":10,\"items\":{\"type\":\"object\",\"required\":[\"issue\"],\"additionalProperties\":false,\"properties\":{\"issue\":{\"type\":\"string\",\"maxLength\":200},\"detail\":{\"type\":\"string\",\"maxLength\":500},\"suggested_action\":{\"type\":\"string\",\"maxLength\":300}}}},\"notes_for_tomorrow\":{\"type\":\"array\",\"maxItems\":8,\"items\":{\"type\":\"string\",\"maxLength\":300}}}};\n\nconst context = $('Prepare Report Input').first().json;\nconst text = ($input.first().json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\\n');\nconst parsed = parseAiJson(text, REPORT_SCHEMA, { label: 'daily report' });\n\n// The numbers stand on their own. If the narrative fails, the report still goes\n// out with the measured figures.\nconst narrative = parsed.ok ? parsed.data : {\n  headline: 'Narrative unavailable - figures below are unaffected.',\n  observations: [],\n  attention: [{ issue: 'report_narrative_failed', detail: (parsed.errors || []).slice(0, 3).join('; '), suggested_action: 'Check the model response in the execution log.' }]\n};\n\nreturn [{ json: { ...context, narrative } }];\n"
+      },
+      "id": "da1836cea9b6e2ebf98cfef6",
+      "name": "Parse Narrative",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/daily_metrics?on_conflict=day,campaign_id",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n      day: $json.day,\n      campaign_id: null,\n      metrics: { ...$json.metrics, breakdowns: $json.breakdowns, narrative: $json.narrative }\n    }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "d4cba1adf1a5f1202901b344",
+      "name": "Store Daily Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst row = $('Parse Narrative').first().json;\nconst m = row.metrics;\nconst n = row.narrative;\nconst line = (label, value) => label + ': ' + (value ?? 0);\nconst pct = (value) => value === null || value === undefined ? 'n/a' : value + '%';\n\nconst text = [\n  'OptiFlow Instagram Outreach - ' + row.day,\n  '',\n  n.headline,\n  '',\n  line('Leads discovered', m.leads_discovered),\n  line('Leads enriched', m.leads_enriched),\n  line('Qualified', m.leads_qualified),\n  'Qualification rate: ' + pct(m.qualification_rate),\n  line('Messages generated', m.messages_generated),\n  line('Messages approved', m.messages_approved),\n  line('Messages sent', m.messages_sent),\n  line('Replies', m.replies),\n  'Reply rate: ' + pct(m.reply_rate),\n  line('Positive replies', m.positive_replies),\n  'Positive reply rate: ' + pct(m.positive_reply_rate),\n  line('Follow-ups due', m.followups_due),\n  line('Interested', m.interested_total),\n  line('Nurture', m.nurture_total),\n  line('Not interested', m.not_interested_total),\n  line('Open errors', m.errors_open),\n  '',\n  'Measured by niche (reply rate - sample size in brackets):',\n  ...(row.breakdowns.by_niche || []).map((x) => '  ' + (x.niche_id ?? 'unknown') + ': ' + pct(x.reply_rate) + ' (' + (x.sent ?? 0) + ' sent)'),\n  '',\n  'Measured by state:',\n  ...(row.breakdowns.by_state || []).map((x) => '  ' + (x.state ?? 'unknown') + ': ' + pct(x.reply_rate) + ' (' + (x.sent ?? 0) + ' sent)'),\n  '',\n  'Measured by outreach angle:',\n  ...(row.breakdowns.by_angle || []).map((x) => '  ' + (x.outreach_angle ?? 'unknown') + ': ' + pct(x.reply_rate) + ' (' + (x.sent ?? 0) + ' sent)'),\n  '',\n  ...(n.segments_too_small_to_read?.length ? ['Too little data to read yet: ' + n.segments_too_small_to_read.join(', '), ''] : []),\n  ...(n.observations?.length ? ['Observations:', ...n.observations.map((o) => '  - ' + o), ''] : []),\n  ...(n.questions_seen?.length ? ['Common questions:', ...n.questions_seen.map((q) => '  - ' + q.theme + ' (' + q.count + ')'), ''] : []),\n  ...(n.objections_seen?.length ? ['Common objections:', ...n.objections_seen.map((o) => '  - ' + o.theme + ' (' + o.count + ')'), ''] : []),\n  ...(n.attention?.length ? ['Needs attention:', ...n.attention.map((a) => '  - ' + a.issue + ': ' + (a.detail ?? '') + ' -> ' + (a.suggested_action ?? '')), ''] : [])\n].join('\\n');\n\nreturn [{ json: { ...row, report_text: text } }];\n"
+      },
+      "id": "d1595c27867954e29186cc77",
+      "name": "Format Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OPERATOR_WEBHOOK_URL || \"https://example.invalid/noop\" }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.report_text }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "eceb70c4c2cd5d750cf32678",
+      "name": "Deliver Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, day: $json.day, report: $json.report_text, metrics: $json.metrics } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "28e0e66499120cada6ccc9b4",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ String($env.SHEETS_ENABLED).toLowerCase() === \"true\" }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0973db1d229ea3e31fc676eb",
+      "name": "Sheets Mirror Enabled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1700,
+        490
+      ],
+      "notes": "Off by default. The database is the source of truth; the sheet is a read-only convenience view."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/v_sheets_export?select=*&limit=1000",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "a532120cd4cb6e1e0a4015d2",
+      "name": "Read Sheets Export View",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        490
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The view defines the exact column set, so the sheet layout lives in SQL rather than in a node."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $env.GOOGLE_SHEETS_SPREADSHEET_ID }}/values/{{ $env.GOOGLE_SHEETS_TAB }}!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.GOOGLE_SHEETS_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: $input.all().map(i => Object.values(i.json)) }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "fa9cd51ddc80c17e0bedf678",
+      "name": "Push To Google Sheets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        490
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "Replace with the n8n Google Sheets node if you prefer its OAuth handling - config/providers.json capability \"mirror\"."
+    },
+    {
+      "parameters": {},
+      "id": "16f010b417adb82536415498",
+      "name": "Mirror Disabled",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        680
+      ]
+    }
+  ],
+  "connections": {
+    "Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Load Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report On Demand": {
+      "main": [
+        [
+          {
+            "node": "Load Active Campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Active Campaigns": {
+      "main": [
+        [
+          {
+            "node": "Compute Daily Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Daily Metrics": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Report Input": {
+      "main": [
+        [
+          {
+            "node": "Claude: Write Narrative",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Write Narrative": {
+      "main": [
+        [
+          {
+            "node": "Parse Narrative",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Narrative": {
+      "main": [
+        [
+          {
+            "node": "Store Daily Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Daily Metrics": {
+      "main": [
+        [
+          {
+            "node": "Format Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sheets Mirror Enabled?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Report": {
+      "main": [
+        [
+          {
+            "node": "Deliver Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deliver Report": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets Mirror Enabled?": {
+      "main": [
+        [
+          {
+            "node": "Read Sheets Export View",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mirror Disabled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Sheets Export View": {
+      "main": [
+        [
+          {
+            "node": "Push To Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "reporting"
+    }
+  ],
+  "meta": {
+    "description": "Daily metrics, narrative report and the optional Google Sheets mirror.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "e1d051e2760c571f2781c06a"
+}

@@ -1,0 +1,707 @@
+{
+  "name": "wf02-clean-dedupe",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/15 6-20 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "9afa5ce6b8b7dba2fcca2cfb",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "046812d5c10191c8bc6dcbfd",
+      "name": "Called By Orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        490
+      ],
+      "notes": "Input: { campaign_id, batch_size?, execution_id? }"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?id=eq.{{ $json.campaign_id || $env.DEFAULT_CAMPAIGN_ID }}&select=*,niche:niches(*)",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "56bcabace289667a479dadf5",
+      "name": "Load Campaign + Niche",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "One read per run. Campaign settings - ICP band, thresholds, daily targets, follow-up offsets - all come from here, never from node parameters."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/claim_leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_campaign_id: $json.id || $json.campaign_id, p_stage: 'SCRAPED', p_limit: $json.batch_size || 25, p_worker: 'wf02-clean-dedupe', p_stale_minutes: 20, p_max_retries: 3 }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "6571a68a54538ba40f7c794d",
+      "name": "Claim SCRAPED Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "SELECT ... FOR UPDATE SKIP LOCKED, so parallel executions never hand the same lead to two workers. A claim older than 20 minutes is treated as abandoned and reissued, which is how a crashed run resumes instead of stranding leads at SCRAPED."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/companies?id=eq.{{ $json.company_id }}&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "976f482f73d807f371382461",
+      "name": "Fetch Company Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "One read per claimed lead. Swap for a single ?id=in.(...) read if batch sizes grow beyond a few hundred."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/normalize.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Normalisation primitives.\n// Everything that turns messy scraped text into a comparable value lives here.\n// Pure functions only - no I/O - so the same code runs in tests, in n8n Code\n// nodes (inlined by n8n/build.mjs) and in scripts.\n// ---------------------------------------------------------------------------\n\nconst US_STATES = {\n  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',\n  colorado: 'CO', connecticut: 'CT', delaware: 'DE', 'district of columbia': 'DC',\n  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL',\n  indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',\n  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',\n  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',\n  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',\n  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK',\n  oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',\n  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',\n  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI',\n  wyoming: 'WY'\n};\n\nconst STATE_CODES = new Set(Object.values(US_STATES));\n\n// Legal-entity and decorative suffixes that must not make two rows look different.\nconst NAME_NOISE = [\n  'llc', 'l l c', 'inc', 'inc.', 'incorporated', 'corp', 'corporation', 'co',\n  'company', 'ltd', 'limited', 'plc', 'pllc', 'pc', 'pa', 'dds', 'md', 'dmd',\n  'the', 'official', 'shop', 'store', 'usa', 'us'\n];\n\nfunction stripDiacritics(value) {\n  return String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');\n}\n\nfunction collapseWhitespace(value) {\n  return String(value ?? '').replace(/\\s+/g, ' ').trim();\n}\n\n/** Display-safe business name: trimmed, de-emojied, single-spaced. */\nfunction cleanBusinessName(value) {\n  if (!value) return null;\n  const cleaned = collapseWhitespace(\n    stripDiacritics(value)\n      .replace(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{FE0F}\\u{200D}]/gu, ' ')\n      .replace(/[|•·–—]+/g, ' ')\n  );\n  return cleaned || null;\n}\n\n/**\n * Comparison key for a business name. Lowercase, no punctuation, no legal\n * suffixes, no filler words. \"Glow Med Spa, LLC\" and \"glow medspa\" collapse to\n * the same key, which is what the dedupe layer matches on.\n */\nfunction normalizeBusinessName(value) {\n  const base = cleanBusinessName(value);\n  if (!base) return null;\n  const tokens = base\n    .toLowerCase()\n    .replace(/&/g, ' and ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .split(/\\s+/)\n    .filter(Boolean)\n    .filter((t) => !NAME_NOISE.includes(t));\n  // \"med spa\" -> \"medspa\", \"hair salon\" -> \"hairsalon\" is too aggressive; only\n  // collapse the two-token forms that are genuinely written both ways.\n  const joined = tokens.join(' ')\n    .replace(/\\bmed spa\\b/g, 'medspa')\n    .replace(/\\bday spa\\b/g, 'dayspa')\n    .replace(/\\be commerce\\b/g, 'ecommerce');\n  return joined || null;\n}\n\n/** Instagram handle without @, url wrapper, query string or trailing slash. */\nfunction normalizeHandle(value) {\n  if (!value) return null;\n  let handle = String(value).trim();\n  const urlMatch = handle.match(/instagram\\.com\\/([^/?#]+)/i);\n  if (urlMatch) handle = urlMatch[1];\n  handle = handle.replace(/^@+/, '').replace(/\\/+$/, '').split('?')[0].trim().toLowerCase();\n  if (!handle) return null;\n  // Instagram handles: letters, numbers, periods, underscores, max 30 chars.\n  if (!/^[a-z0-9._]{1,30}$/.test(handle)) return null;\n  const reserved = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'accounts', 'direct', 'tv']);\n  if (reserved.has(handle)) return null;\n  return handle;\n}\n\nfunction instagramUrl(handle) {\n  const h = normalizeHandle(handle);\n  return h ? `https://www.instagram.com/${h}/` : null;\n}\n\n/** Absolute, lowercase-host URL with tracking parameters removed. */\nfunction normalizeUrl(value) {\n  if (!value) return null;\n  let raw = String(value).trim();\n  if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null;\n  if (!/^https?:\\/\\//i.test(raw)) raw = `https://${raw}`;\n  let url;\n  try {\n    url = new URL(raw);\n  } catch {\n    return null;\n  }\n  if (!/^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(url.hostname)) return null;\n  for (const key of [...url.searchParams.keys()]) {\n    if (/^(utm_|fbclid|gclid|mc_|ref|source)/i.test(key)) url.searchParams.delete(key);\n  }\n  url.hostname = url.hostname.toLowerCase();\n  url.hash = '';\n  const path = url.pathname.replace(/\\/+$/, '');\n  return `${url.protocol}//${url.hostname}${path}${url.search}`;\n}\n\n// Link-in-bio aggregators are not a website - they must never become a dedupe key.\nconst AGGREGATOR_DOMAINS = new Set([\n  'linktr.ee', 'link.tree', 'beacons.ai', 'bio.link', 'linkin.bio', 'msha.ke',\n  'taplink.cc', 'lnk.bio', 'solo.to', 'campsite.bio', 'linkpop.com', 'many.link',\n  'instagram.com', 'facebook.com', 'm.facebook.com', 'business.facebook.com',\n  'tiktok.com', 'youtube.com', 'twitter.com', 'x.com', 'wa.me', 'api.whatsapp.com',\n  'g.page', 'goo.gl', 'maps.google.com', 'yelp.com', 'booksy.com', 'vagaro.com',\n  'square.site', 'squareup.com', 'calendly.com', 'sites.google.com'\n]);\n\nfunction isAggregatorDomain(domain) {\n  if (!domain) return false;\n  const d = String(domain).toLowerCase().replace(/^www\\./, '');\n  return AGGREGATOR_DOMAINS.has(d);\n}\n\n/** Registrable-ish domain: host without www, aggregators rejected. */\nfunction normalizeDomain(value) {\n  const url = normalizeUrl(value);\n  if (!url) return null;\n  let host;\n  try {\n    host = new URL(url).hostname.toLowerCase().replace(/^www\\./, '');\n  } catch {\n    return null;\n  }\n  if (isAggregatorDomain(host)) return null;\n  return host;\n}\n\n/** US phone to E.164. Anything that is not a plausible US number returns null. */\nfunction normalizePhone(value, defaultCountry = '1') {\n  if (!value) return null;\n  const raw = String(value);\n  if (/ext|x\\d{3,}/i.test(raw) === false && raw.trim().startsWith('+')) {\n    const intl = raw.replace(/[^\\d+]/g, '');\n    if (/^\\+\\d{8,15}$/.test(intl)) return intl;\n  }\n  const digits = raw.replace(/\\D/g, '');\n  if (!digits) return null;\n  let national = digits;\n  if (national.length === 11 && national.startsWith('1')) national = national.slice(1);\n  if (national.length !== 10) return null;\n  if (/^[01]/.test(national)) return null;              // invalid NANP area code\n  if (/^(\\d)\\1{9}$/.test(national)) return null;        // 5555555555 style junk\n  return `+${defaultCountry}${national}`;\n}\n\nfunction normalizeEmail(value) {\n  if (!value) return null;\n  const email = String(value).trim().toLowerCase().replace(/^mailto:/, '');\n  if (!/^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/.test(email)) return null;\n  const local = email.split('@')[0];\n  if (/^(noreply|no-reply|donotreply|postmaster|abuse|privacy)$/.test(local)) return null;\n  return email;\n}\n\n/** Accepts \"California\", \"california\", \"CA\", \"Calif.\" -> \"CA\". */\nfunction normalizeState(value) {\n  if (!value) return null;\n  const raw = String(value).trim();\n  const upper = raw.toUpperCase();\n  if (STATE_CODES.has(upper)) return upper;\n  const key = stripDiacritics(raw).toLowerCase().replace(/[^a-z\\s]/g, '').trim();\n  if (US_STATES[key]) return US_STATES[key];\n  const prefix = Object.keys(US_STATES).find((name) => name.startsWith(key) && key.length >= 4);\n  return prefix ? US_STATES[prefix] : null;\n}\n\nfunction normalizeCity(value) {\n  if (!value) return null;\n  const city = collapseWhitespace(stripDiacritics(value).replace(/[^\\p{L}\\s.'-]/gu, ' '));\n  if (!city || city.length < 2) return null;\n  return city\n    .toLowerCase()\n    .split(' ')\n    .map((w) => (w.length > 2 || /^(st|ft)$/.test(w) ? w[0].toUpperCase() + w.slice(1) : w))\n    .join(' ');\n}\n\nfunction slug(value) {\n  return stripDiacritics(String(value ?? ''))\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '')\n    .slice(0, 40);\n}\n\n/** \"12.3k\" / \"1,234\" / \"2.1M\" -> integer. */\nfunction parseCount(value) {\n  if (value === null || value === undefined || value === '') return null;\n  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;\n  const raw = String(value).trim().toLowerCase().replace(/,/g, '').replace(/\\s/g, '');\n  const match = raw.match(/^([\\d.]+)([km])?$/);\n  if (!match) return null;\n  const n = Number.parseFloat(match[1]);\n  if (!Number.isFinite(n)) return null;\n  const mult = match[2] === 'k' ? 1e3 : match[2] === 'm' ? 1e6 : 1;\n  return Math.round(n * mult);\n}\n\nfunction toIsoDate(value) {\n  if (!value) return null;\n  const d = value instanceof Date ? value : new Date(value);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString();\n}\n\nfunction daysSince(value, now = new Date()) {\n  const iso = toIsoDate(value);\n  if (!iso) return null;\n  return Math.floor((now.getTime() - new Date(iso).getTime()) / 86400000);\n}\n\n/**\n * Normalise a raw discovery row into the canonical lead shape every downstream\n * step expects. Unknown provider fields are kept under `raw`.\n */\nfunction normalizeRawLead(raw = {}) {\n  const pick = (...keys) => {\n    for (const k of keys) {\n      const v = k.split('.').reduce((o, part) => (o == null ? o : o[part]), raw);\n      if (v !== undefined && v !== null && v !== '') return v;\n    }\n    return null;\n  };\n\n  const name = cleanBusinessName(pick('business_name', 'name', 'title', 'fullName', 'ownerFullName'));\n  const handle = normalizeHandle(pick('instagram_handle', 'username', 'instagram', 'instagramUrl', 'instagram_url'));\n  const website = normalizeUrl(pick('website', 'url', 'externalUrl', 'external_url', 'site'));\n  const domain = normalizeDomain(website);\n  const state = normalizeState(pick('state', 'region', 'administrativeArea', 'address.state'));\n  const city = normalizeCity(pick('city', 'locality', 'address.city'));\n  const products = toProductList(pick('products_services', 'products', 'services', 'menu', 'categories'));\n\n  return {\n    business_name: name,\n    name_normalized: normalizeBusinessName(name),\n    instagram_handle: handle,\n    instagram_url: instagramUrl(handle) ?? normalizeUrl(pick('instagram_url', 'instagramUrl')),\n    website,\n    website_domain: domain,\n    email: normalizeEmail(pick('email', 'emails.0', 'contact_email')),\n    phone: pick('phone', 'phoneNumber', 'phone_number', 'telephone'),\n    phone_e164: normalizePhone(pick('phone', 'phoneNumber', 'phone_number', 'telephone')),\n    country: pick('country', 'countryCode') ?? 'US',\n    state,\n    city,\n    postal_code: pick('postal_code', 'postalCode', 'zip'),\n    address: pick('address', 'formattedAddress', 'street'),\n    latitude: numberOrNull(pick('latitude', 'location.lat', 'lat')),\n    longitude: numberOrNull(pick('longitude', 'location.lng', 'lng')),\n    category: pick('category', 'categoryName', 'businessCategoryName', 'business_category'),\n    bio: pick('bio', 'biography', 'description'),\n    website_description: pick('website_description', 'meta_description'),\n    products_services: products,\n    products_count: products.length || parseCount(pick('products_count', 'productsCount')),\n    ig_followers: parseCount(pick('ig_followers', 'followersCount', 'followers', 'follower_count')),\n    ig_following: parseCount(pick('ig_following', 'followsCount', 'following')),\n    ig_posts: parseCount(pick('ig_posts', 'postsCount', 'posts', 'media_count')),\n    ig_is_business: boolOrNull(pick('ig_is_business', 'isBusinessAccount', 'is_business_account')),\n    ig_is_private: boolOrNull(pick('ig_is_private', 'private', 'is_private')),\n    ig_is_verified: boolOrNull(pick('ig_is_verified', 'verified', 'is_verified')),\n    ig_last_post_at: toIsoDate(pick('ig_last_post_at', 'latestPostDate', 'last_post_at')),\n    ig_external_url: normalizeUrl(pick('externalUrl', 'external_url', 'bio_link')),\n    place_id: pick('place_id', 'placeId', 'fid'),\n    source: pick('source', '_source') ?? 'unknown',\n    source_search_term: pick('search_term', 'searchString', 'query'),\n    raw\n  };\n}\n\nfunction numberOrNull(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction boolOrNull(v) {\n  if (v === true || v === false) return v;\n  if (v === 'true') return true;\n  if (v === 'false') return false;\n  return null;\n}\n\n/** Products/services arrive as arrays, comma strings or objects. */\nfunction toProductList(value) {\n  if (!value) return [];\n  let items = [];\n  if (Array.isArray(value)) items = value;\n  else if (typeof value === 'string') items = value.split(/[,;|\\n]/);\n  else if (typeof value === 'object') items = Object.values(value);\n  const seen = new Set();\n  const out = [];\n  for (const item of items) {\n    const label = collapseWhitespace(\n      typeof item === 'string' ? item : (item?.name ?? item?.title ?? item?.label ?? '')\n    );\n    if (!label || label.length < 2 || label.length > 120) continue;\n    const key = label.toLowerCase();\n    if (seen.has(key)) continue;\n    seen.add(key);\n    out.push(label);\n  }\n  return out;\n}\n\n// ---- lib/clean.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Cleaning stage: decide whether a normalised lead belongs in the campaign at\n// all, and why. Every rejection carries a machine-readable reason so nothing\n// disappears silently - the reason lands on leads.disqualified_reason and in\n// the activity log.\n// ---------------------------------------------------------------------------\n\nconst PERSON_NAME_RE = /^[A-Z][a-z]+(?:\\s+[A-Z]\\.?)?\\s+[A-Z][a-z]+$/;\n\n// Words that make a two-word name a business name rather than a person's name.\n// \"Glow Medspa\" and \"Radiance Aesthetics\" must not read as people.\nconst BUSINESS_NAME_WORDS = /\\b(spa|medspa|salon|clinic|dental|dentistry|studio|shop|store|boutique|brand|co|company|collective|labs?|works|supply|goods|apparel|wear|beauty|aesthetics?|skin|smile|care|health|wellness|fitness|gym|pet|pets|home|robotics|tech|bags?|jewel\\w*|watch\\w*|eyewear|auto|motors|outfitters)\\b/i;\n\nfunction textOf(lead, field) {\n  const value = lead?.[field];\n  if (Array.isArray(value)) return value.join(' ');\n  return value == null ? '' : String(value);\n}\n\nfunction haystack(lead, fields) {\n  return fields.map((f) => textOf(lead, f)).join(' \\n ').toLowerCase();\n}\n\nfunction matchesAny(text, terms) {\n  const hits = [];\n  for (const term of terms ?? []) {\n    const t = String(term).toLowerCase().trim();\n    if (!t) continue;\n    const re = new RegExp(`(^|[^a-z0-9])${t.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}([^a-z0-9]|$)`, 'i');\n    if (re.test(text)) hits.push(t);\n  }\n  return hits;\n}\n\n/** Personal-account score. Returns { score, signals[] }. */\nfunction personalAccountScore(lead, rules) {\n  const cfg = rules?.personal_account_signals;\n  if (!cfg) return { score: 0, signals: [] };\n  const signals = [];\n  let score = 0;\n\n  for (const signal of cfg.signals ?? []) {\n    let hit = false;\n    if (signal.pattern) {\n      const text = textOf(lead, signal.field ?? 'bio').toLowerCase();\n      hit = new RegExp(signal.pattern, 'i').test(text);\n    } else {\n      switch (signal.check) {\n        case 'no_website_no_category_no_products':\n          hit = !lead.website_domain && !lead.category && (lead.products_services ?? []).length === 0;\n          break;\n        case 'ig_is_business_false':\n          hit = lead.ig_is_business === false;\n          break;\n        case 'name_is_person_name': {\n          const name = String(lead.business_name ?? '').trim();\n          // A business word anywhere in the name settles it - so does a match\n          // against the niche's own keywords, checked by the caller via flags.\n          hit = PERSON_NAME_RE.test(name) && !BUSINESS_NAME_WORDS.test(name);\n          break;\n        }\n        case 'ig_is_private':\n          hit = lead.ig_is_private === true;\n          break;\n        case 'aggregator_link_only':\n          hit = !lead.website_domain && isAggregatorDomain(lead.ig_external_url);\n          break;\n        default:\n          hit = false;\n      }\n    }\n    if (hit) {\n      score += signal.weight ?? 1;\n      signals.push(signal.id);\n    }\n  }\n  return { score, signals };\n}\n\n/** Does the lead look like it belongs to this niche? */\nfunction nicheMatch(lead, niche, rules) {\n  const cfg = rules?.niche_match ?? { min_keyword_hits: 1, fields: ['business_name', 'bio', 'category'] };\n  const text = haystack(lead, cfg.fields ?? []);\n  const negatives = matchesAny(text, niche?.negative_keywords ?? []);\n  const positives = matchesAny(text, niche?.keywords ?? []);\n  const categoryHit = Boolean(\n    lead.category && (niche?.keywords ?? []).some((k) => String(lead.category).toLowerCase().includes(String(k).toLowerCase()))\n  );\n  const hits = categoryHit && !positives.length ? [String(lead.category).toLowerCase()] : positives;\n  return {\n    matched: hits.length >= (cfg.min_keyword_hits ?? 1) && !(cfg.negative_keyword_drops && negatives.length),\n    hits,\n    negatives\n  };\n}\n\n/** Is the lead inside the campaign's geography? */\nfunction locationMatch(lead, campaign, rules) {\n  const targeting = campaign?.targeting ?? {};\n  const states = (targeting.states ?? []).map((s) => String(s).toUpperCase());\n  const cities = (targeting.cities ?? []).map((c) => String(c).toLowerCase());\n  const excluded = (targeting.exclude_cities ?? []).map((c) => String(c).toLowerCase());\n  const cfg = rules?.location ?? {};\n\n  const leadState = lead.state ? String(lead.state).toUpperCase() : null;\n  const leadCity = lead.city ? String(lead.city).toLowerCase() : null;\n\n  if (leadCity && excluded.includes(leadCity)) return { matched: false, reason: 'city_excluded' };\n\n  if (!leadState) {\n    if (leadCity && cities.includes(leadCity) && cfg.allow_unknown_state_if_city_matches !== false) {\n      return { matched: true, reason: 'city_match_state_unknown' };\n    }\n    if (cfg.allow_unknown_location_for_ecommerce && campaign?._niche?.business_model === 'ecommerce_brand') {\n      return { matched: true, reason: 'unknown_location_allowed_for_ecommerce' };\n    }\n    return { matched: false, reason: 'location_unknown' };\n  }\n\n  if (states.length && !states.includes(leadState)) return { matched: false, reason: 'state_outside_target' };\n  if (cities.length && leadCity && !cities.includes(leadCity)) {\n    // Inside the right state but a city we did not ask for: keep it, flag it.\n    return { matched: true, reason: 'state_match_city_outside_list', soft: true };\n  }\n  return { matched: true, reason: 'state_match' };\n}\n\n/**\n * Main entry point. Returns a decision object; the caller writes it to the DB.\n *   { keep, reasons[], flags{}, lead }\n */\nfunction cleanLead(lead, { campaign = {}, niche = null, rules = {}, now = new Date() } = {}) {\n  const reasons = [];\n  const flags = {};\n  const bounds = rules.absolute_bounds ?? {};\n\n  const name = lead.business_name;\n  if (!name) reasons.push('missing_business_name');\n  if (name && bounds.max_name_length && name.length > bounds.max_name_length) reasons.push('name_too_long');\n\n  const requiresIg = campaign?.icp?.require_instagram !== false;\n  if (requiresIg && !lead.instagram_handle) reasons.push('missing_instagram');\n\n  // Absolute follower/activity sanity bounds (campaign ICP bounds are scored later).\n  const followers = lead.ig_followers;\n  if (followers != null) {\n    if (bounds.min_followers != null && followers < bounds.min_followers) reasons.push('below_absolute_min_followers');\n    if (bounds.max_followers != null && followers > bounds.max_followers) reasons.push('above_absolute_max_followers');\n  }\n  if (bounds.min_posts != null && lead.ig_posts != null && lead.ig_posts < bounds.min_posts) {\n    reasons.push('too_few_posts');\n  }\n  if (\n    bounds.max_following_to_followers_ratio &&\n    lead.ig_following && followers && followers > 0 &&\n    lead.ig_following / followers > bounds.max_following_to_followers_ratio\n  ) {\n    flags.follow_ratio_suspicious = true;\n  }\n\n  // Competitors, agencies, info-products.\n  const blockText = haystack(lead, ['business_name', 'bio', 'category', 'website_description']);\n  const blocked = matchesAny(blockText, rules.blocked_keywords?.terms ?? []);\n  if (blocked.length) {\n    reasons.push('blocked_business_type');\n    flags.blocked_terms = blocked;\n  }\n\n  const fanHits = (rules.fan_account_markers?.patterns ?? []).filter((p) => new RegExp(p, 'i').test(blockText));\n  if (fanHits.length) reasons.push('fan_or_parody_account');\n\n  const resellerHits = (rules.reseller_markers?.patterns ?? []).filter((p) => new RegExp(p, 'i').test(blockText));\n  if (resellerHits.length) flags.suspected_reseller = true;\n\n  // Personal accounts.\n  const personal = personalAccountScore(lead, rules);\n  flags.personal_score = personal.score;\n  flags.personal_signals = personal.signals;\n  if (personal.score >= (rules.personal_account_signals?.threshold ?? 3)) reasons.push('personal_account');\n\n  // Niche.\n  if (niche) {\n    const match = nicheMatch(lead, niche, rules);\n    flags.niche_hits = match.hits;\n    flags.niche_negatives = match.negatives;\n    if (!match.matched) reasons.push(match.negatives.length ? 'niche_negative_keyword' : 'outside_target_niche');\n  }\n\n  // Location.\n  const loc = locationMatch(lead, { ...campaign, _niche: niche }, rules);\n  flags.location_reason = loc.reason;\n  if (!loc.matched) reasons.push('outside_target_location');\n  if (loc.soft) flags.city_outside_list = true;\n\n  // Freshness (soft signal only - scoring decides how much it costs).\n  const age = daysSince(lead.ig_last_post_at, now);\n  if (age != null) flags.days_since_last_post = age;\n\n  return {\n    keep: reasons.length === 0,\n    reasons,\n    flags,\n    lead: { ...lead, name_normalized: lead.name_normalized ?? normalizeBusinessName(lead.business_name) }\n  };\n}\n\n// ---- lib/dedupe.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Deduplication.\n// Two walls stop a business being contacted twice:\n//   1. this module, in memory, inside a discovery batch;\n//   2. resolve_company() + unique(campaign_id, company_id) in the database.\n// Both use the same identity keys, in the same priority order.\n// ---------------------------------------------------------------------------\n\nconst KEY_PRIORITY = ['instagram_handle', 'website_domain', 'place_id', 'phone_e164', 'email', 'name_city'];\n\n/** Every identity key a lead carries, strongest first. */\nfunction identityKeys(lead = {}) {\n  const keys = [];\n  const handle = normalizeHandle(lead.instagram_handle);\n  const domain = normalizeDomain(lead.website_domain ?? lead.website);\n  const phone = normalizePhone(lead.phone_e164 ?? lead.phone);\n  const email = normalizeEmail(lead.email);\n  const name = lead.name_normalized ?? normalizeBusinessName(lead.business_name);\n\n  if (handle) keys.push({ key_type: 'instagram_handle', key_value: handle });\n  if (domain) keys.push({ key_type: 'website_domain', key_value: domain });\n  if (lead.place_id) keys.push({ key_type: 'place_id', key_value: String(lead.place_id) });\n  if (phone) keys.push({ key_type: 'phone_e164', key_value: phone });\n  if (email) keys.push({ key_type: 'email', key_value: email });\n  if (name) {\n    keys.push({\n      key_type: 'name_city',\n      key_value: `${name}|${(lead.city ?? '').toLowerCase()}|${(lead.state ?? '').toUpperCase()}`\n    });\n  }\n  return keys;\n}\n\n/** Levenshtein distance, iterative, two-row. */\nfunction levenshtein(a = '', b = '') {\n  if (a === b) return 0;\n  if (!a.length) return b.length;\n  if (!b.length) return a.length;\n  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);\n  for (let i = 0; i < a.length; i += 1) {\n    const cur = [i + 1];\n    for (let j = 0; j < b.length; j += 1) {\n      cur[j + 1] = Math.min(prev[j + 1] + 1, cur[j] + 1, prev[j] + (a[i] === b[j] ? 0 : 1));\n    }\n    prev = cur;\n  }\n  return prev[b.length];\n}\n\n/** 0..1 similarity blending edit distance with token overlap. */\nfunction nameSimilarity(a, b) {\n  const x = normalizeBusinessName(a);\n  const y = normalizeBusinessName(b);\n  if (!x || !y) return 0;\n  if (x === y) return 1;\n  const edit = 1 - levenshtein(x, y) / Math.max(x.length, y.length);\n  const ta = new Set(x.split(' '));\n  const tb = new Set(y.split(' '));\n  const inter = [...ta].filter((t) => tb.has(t)).length;\n  const jaccard = inter / (ta.size + tb.size - inter);\n  return Math.max(0, Math.min(1, 0.5 * edit + 0.5 * jaccard));\n}\n\n/**\n * Do two leads describe the same business?\n * Strong keys decide on their own. A name match only counts when the location\n * agrees, so \"Glow Medspa, Austin\" never merges into \"Glow Medspa, Miami\".\n */\nfunction isLikelySame(a, b, { nameThreshold = 0.92 } = {}) {\n  const ka = identityKeys(a);\n  const kb = identityKeys(b);\n  for (const type of KEY_PRIORITY) {\n    if (type === 'name_city') continue;\n    const va = ka.find((k) => k.key_type === type)?.key_value;\n    const vb = kb.find((k) => k.key_type === type)?.key_value;\n    if (va && vb) {\n      if (va === vb) return { same: true, matched_on: type, confidence: 1 };\n      if (type === 'instagram_handle' || type === 'website_domain') {\n        // Conflicting strong keys mean these really are different businesses.\n        return { same: false, matched_on: null, confidence: 0, conflict: type };\n      }\n    }\n  }\n  const sim = nameSimilarity(a.business_name, b.business_name);\n  const sameCity = (a.city ?? '').toLowerCase() === (b.city ?? '').toLowerCase() && Boolean(a.city);\n  const sameState = (a.state ?? '').toUpperCase() === (b.state ?? '').toUpperCase() && Boolean(a.state);\n  if (sim >= nameThreshold && sameCity && sameState) {\n    return { same: true, matched_on: 'name_city', confidence: sim };\n  }\n  return { same: false, matched_on: null, confidence: sim };\n}\n\n/**\n * Collapse a discovery batch.\n * Returns { unique, duplicates } where each duplicate records what it matched.\n * Records are merged field-by-field so the surviving row keeps the best value\n * from every copy (a handle from one source, a phone from another).\n */\nfunction dedupeBatch(leads = [], options = {}) {\n  const index = new Map();       // key -> position in unique[]\n  const unique = [];\n  const duplicates = [];\n\n  for (const lead of leads) {\n    const keys = identityKeys(lead);\n    let hitIndex = -1;\n    let matchedOn = null;\n\n    for (const type of KEY_PRIORITY) {\n      const key = keys.find((k) => k.key_type === type);\n      if (!key) continue;\n      const found = index.get(`${key.key_type}:${key.key_value}`);\n      if (found !== undefined) {\n        hitIndex = found;\n        matchedOn = key.key_type;\n        break;\n      }\n    }\n\n    if (hitIndex === -1) {\n      // No exact key hit: fall back to fuzzy comparison against same-city rows.\n      for (let i = 0; i < unique.length; i += 1) {\n        const verdict = isLikelySame(unique[i], lead, options);\n        if (verdict.same) {\n          hitIndex = i;\n          matchedOn = verdict.matched_on;\n          break;\n        }\n      }\n    }\n\n    if (hitIndex === -1) {\n      unique.push({ ...lead });\n      const position = unique.length - 1;\n      for (const key of keys) index.set(`${key.key_type}:${key.key_value}`, position);\n    } else {\n      duplicates.push({ lead, duplicate_of: unique[hitIndex], matched_on: matchedOn });\n      unique[hitIndex] = mergeLeads(unique[hitIndex], lead);\n      for (const key of identityKeys(unique[hitIndex])) {\n        if (!index.has(`${key.key_type}:${key.key_value}`)) {\n          index.set(`${key.key_type}:${key.key_value}`, hitIndex);\n        }\n      }\n    }\n  }\n\n  return { unique, duplicates };\n}\n\n/** Gap-filling merge: never replace a known value with null, prefer richer lists. */\nfunction mergeLeads(base, incoming) {\n  const out = { ...base };\n  for (const [field, value] of Object.entries(incoming)) {\n    if (value === null || value === undefined || value === '') continue;\n    const current = out[field];\n    if (current === null || current === undefined || current === '') {\n      out[field] = value;\n      continue;\n    }\n    if (Array.isArray(value) && Array.isArray(current)) {\n      const merged = [...current];\n      const seen = new Set(current.map((v) => String(v).toLowerCase()));\n      for (const item of value) {\n        const key = String(item).toLowerCase();\n        if (!seen.has(key)) { seen.add(key); merged.push(item); }\n      }\n      out[field] = merged;\n      continue;\n    }\n    if (typeof value === 'number' && typeof current === 'number') {\n      // Counts: trust the larger, more complete observation.\n      if (/^(ig_followers|ig_following|ig_posts|products_count)$/.test(field)) {\n        out[field] = Math.max(current, value);\n      }\n      continue;\n    }\n    if (field === 'raw' && typeof value === 'object') {\n      out.raw = { ...(current ?? {}), ...value };\n    }\n  }\n  out.products_count = (out.products_services ?? []).length || out.products_count || null;\n  return out;\n}\n\n// ---- node logic ----\nconst CLEANING_RULES = {\"version\":1,\"note\":\"Rules for the cleaning stage. Everything here is data, not code - edit this file to change what gets filtered out, and lib/clean.js picks it up.\",\"blocked_keywords\":{\"note\":\"Businesses we must never pitch: our own competitors, agencies that resell us, and coaching/info products that look like brands but are not.\",\"terms\":[\"bpo\",\"call center\",\"callcenter\",\"contact center\",\"outsourcing\",\"virtual assistant agency\",\"answering service\",\"va agency\",\"staffing agency\",\"recruiting agency\",\"recruitment agency\",\"marketing agency\",\"digital agency\",\"growth agency\",\"seo agency\",\"ads agency\",\"media buying\",\"lead generation agency\",\"smma\",\"social media agency\",\"web design agency\",\"branding agency\",\"business coach\",\"sales coach\",\"mindset coach\",\"online course\",\"masterclass\",\"ebook\",\"dropshipping course\",\"print on demand course\",\"affiliate marketing\",\"mlm\",\"network marketing\",\"crypto\",\"forex\",\"nft\",\"trading signals\",\"software company\",\"saas platform\",\"crm software\",\"app development\",\"franchise opportunity\",\"wholesale supplier\",\"b2b directory\",\"trade show\",\"expo\"]},\"personal_account_signals\":{\"note\":\"Each matched signal adds its weight. At or above `threshold` the account is treated as personal and dropped.\",\"threshold\":3,\"signals\":[{\"id\":\"bio_personal_pronoun\",\"weight\":2,\"pattern\":\"\\\\b(i'm|im a|my name is|mom of|dad of|wife|husband|girlfriend|boyfriend)\\\\b\",\"field\":\"bio\"},{\"id\":\"personal_role\",\"weight\":2,\"pattern\":\"\\\\b(content creator|influencer|blogger|model|photographer|artist|ugc creator|student|nurse|realtor)\\\\b\",\"field\":\"bio\"},{\"id\":\"no_business_markers\",\"weight\":2,\"check\":\"no_website_no_category_no_products\"},{\"id\":\"not_business_account\",\"weight\":1,\"check\":\"ig_is_business_false\"},{\"id\":\"name_looks_personal\",\"weight\":1,\"check\":\"name_is_person_name\"},{\"id\":\"private_account\",\"weight\":2,\"check\":\"ig_is_private\"},{\"id\":\"link_in_bio_only\",\"weight\":0,\"check\":\"aggregator_link_only\"}]},\"fan_account_markers\":{\"note\":\"Accounts about a brand rather than the brand itself.\",\"patterns\":[\"\\\\bfan (page|account)\\\\b\",\"\\\\bnot affiliated\\\\b\",\"\\\\bparody\\\\b\",\"\\\\bbackup account\\\\b\",\"\\\\bsecond account\\\\b\"]},\"reseller_markers\":{\"patterns\":[\"\\\\breseller\\\\b\",\"\\\\bauthorized dealer\\\\b\",\"\\\\bdistributor of\\\\b\",\"\\\\bwe ship worldwide dm to order\\\\b\",\"\\\\bdm to order\\\\b\",\"\\\\breplica\\\\b\",\"\\\\bdupe\\\\b\",\"\\\\bpreorder only\\\\b\"]},\"absolute_bounds\":{\"note\":\"Hard sanity bounds applied before any campaign-specific ICP rule.\",\"min_followers\":300,\"max_followers\":250000,\"max_following_to_followers_ratio\":3,\"min_posts\":6,\"max_name_length\":120},\"location\":{\"require_state_match\":true,\"allow_unknown_state_if_city_matches\":true,\"allow_unknown_location_for_ecommerce\":false,\"note\":\"E-commerce brands often hide their address. Set allow_unknown_location_for_ecommerce=true per campaign if you would rather keep them and let the AI judge.\"},\"niche_match\":{\"note\":\"A lead must hit at least `min_keyword_hits` niche keywords across name, bio, category, products and website description - or carry the niche's Google category.\",\"min_keyword_hits\":1,\"fields\":[\"business_name\",\"bio\",\"category\",\"website_description\",\"products_services\"],\"negative_keyword_drops\":true}};\n\nconst campaign = $('Load Campaign + Niche').first().json;\nconst niche = campaign.niche || {};\nconst out = [];\n\nfor (const item of $input.all()) {\n  const company = Array.isArray(item.json) ? item.json[0] : item.json;\n  if (!company || !company.id) continue;\n\n  const claimedLead = $('Claim SCRAPED Leads').all()\n    .map((i) => i.json)\n    .find((l) => l.company_id === company.id) || {};\n\n  const lead = normalizeRawLead({\n    ...company,\n    business_name: company.name,\n    ig_last_post_at: company.ig_last_post_at\n  });\n  lead.days_since_last_post = daysSince(company.ig_last_post_at);\n  lead.previously_contacted = Boolean(company.suppressed);\n\n  const decision = cleanLead(lead, { campaign, niche, rules: CLEANING_RULES });\n\n  out.push({ json: {\n    lead_id: claimedLead.id,\n    company_id: company.id,\n    campaign_id: campaign.id,\n    keep: decision.keep,\n    decision: decision.keep ? 'KEEP' : 'DROP',\n    reasons: decision.reasons,\n    flags: decision.flags,\n    identity_keys: identityKeys(lead),\n    lead: decision.lead\n  } });\n}\nreturn out;\n"
+      },
+      "id": "d2e5a769461f9e1111bbbfa0",
+      "name": "Apply Cleaning Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        300
+      ],
+      "notes": "Rules come from config/cleaning.json, inlined at build time. Edit that file and rebuild to change what is filtered - no node edits."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "KEEP",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "keep"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.decision }}",
+                    "rightValue": "DROP",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "drop"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "3e38050f7a444b97da848720",
+      "name": "Keep or Drop",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/companies?id=eq.{{ $json.company_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ niche_id: $('Load Campaign + Niche').first().json.niche_id, business_model: $('Load Campaign + Niche').first().json.niche?.business_model, raw: { cleaning_flags: $json.flags } }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "08ddfef3a0fcd41bcf416a38",
+      "name": "Store Cleaning Flags",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/advance_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id,\n    p_to_stage: \"CLEANED\",\n    p_status: \"NEW\",\n    p_step: \"clean.normalize_filter_dedupe\",\n    p_detail: { actor: \"n8n:wf02\", flags: $json.flags },\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "2463c4cd999e65573a8dfb57",
+      "name": "Advance To CLEANED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ disqualified_reason: $json.reasons.join(\", \"), qualified: false, notes: \"Dropped at cleaning: \" + $json.reasons.join(\", \") }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "b762cdf6115bcf06de4b3625",
+      "name": "Record Drop Reason",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        490
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/advance_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id,\n    p_to_stage: \"DISQUALIFIED\",\n    p_status: \"CLOSED\",\n    p_step: \"clean.rejected\",\n    p_detail: { actor: \"n8n:wf02\", reasons: $json.reasons },\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "83944d479d2e0a8b58e6d5d9",
+      "name": "Advance To DISQUALIFIED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        490
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/retry.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Error classification, backoff and rate-limit handling.\n// Used by every node that talks to an external service. The contract is simple:\n// classify -> decide retry -> compute delay -> record. One failed lead never\n// stops a campaign, and a rate limit pauses only the provider that raised it.\n// ---------------------------------------------------------------------------\n\nconst ERROR_TYPES = ['rate_limit', 'timeout', 'auth', 'validation', 'provider_error', 'ai_schema', 'network', 'unknown'];\n\nconst RETRYABLE = new Set(['rate_limit', 'timeout', 'provider_error', 'network', 'ai_schema']);\n\n/** Map an HTTP status / thrown error onto one of ERROR_TYPES. */\nfunction classifyError(error = {}) {\n  const status = error.status ?? error.httpCode ?? error.statusCode ?? error.response?.status ?? null;\n  const message = String(error.message ?? error.error ?? error ?? '');\n\n  if (status === 429) return 'rate_limit';\n  if (status === 408 || /timeout|etimedout|esockettimedout|aborted/i.test(message)) return 'timeout';\n  if (status === 401 || status === 403) return 'auth';\n  if (status === 400 || status === 422) return 'validation';\n  if (status && status >= 500) return 'provider_error';\n  if (/econnreset|enotfound|econnrefused|socket hang up|network/i.test(message)) return 'network';\n  if (/schema|json|unexpected token|failed to parse/i.test(message)) return 'ai_schema';\n  if (/rate limit|too many requests|quota/i.test(message)) return 'rate_limit';\n  return 'unknown';\n}\n\nfunction isRetryable(errorType) {\n  return RETRYABLE.has(errorType);\n}\n\n/**\n * Exponential backoff with full jitter, honouring Retry-After when present.\n * 2s, 4s, 8s, 16s ... capped.\n */\nfunction backoffMs(attempt, { baseMs = 2000, capMs = 300000, retryAfterSeconds = null, jitter = true } = {}) {\n  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {\n    return Math.min(capMs, Number(retryAfterSeconds) * 1000);\n  }\n  const exponential = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));\n  if (!jitter) return exponential;\n  return Math.floor(exponential / 2 + Math.random() * (exponential / 2));\n}\n\nfunction retryAfterFrom(headers = {}) {\n  const raw = headers['retry-after'] ?? headers['Retry-After'] ?? headers['x-ratelimit-reset-after'];\n  if (raw == null) return null;\n  const seconds = Number(raw);\n  if (Number.isFinite(seconds)) return seconds;\n  const when = Date.parse(raw);\n  return Number.isFinite(when) ? Math.max(0, Math.round((when - Date.now()) / 1000)) : null;\n}\n\n/**\n * Decision object for a failed item.\n * `dead_letter` means: stop retrying, keep the row in `errors`, carry on with\n * the rest of the batch.\n */\nfunction decideRetry({ error, attempt = 1, maxRetries = 3, headers = {} } = {}) {\n  const errorType = classifyError(error);\n  const retryable = isRetryable(errorType);\n  const exhausted = attempt >= maxRetries;\n  return {\n    error_type: errorType,\n    retryable,\n    retry: retryable && !exhausted,\n    dead_letter: !retryable || exhausted,\n    delay_ms: retryable ? backoffMs(attempt, { retryAfterSeconds: retryAfterFrom(headers) }) : 0,\n    attempt,\n    max_retries: maxRetries,\n    reason: !retryable\n      ? `${errorType} is not retryable`\n      : exhausted\n        ? `retry budget exhausted after ${attempt} attempts`\n        : `retrying after backoff`\n  };\n}\n\n/** Wrap an async call with retries. Used by scripts; n8n uses its own node retry plus this classifier. */\nasync function withRetry(fn, { maxRetries = 3, onRetry = null, sleep = defaultSleep } = {}) {\n  let lastError;\n  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {\n    try {\n      return await fn(attempt);\n    } catch (error) {\n      lastError = error;\n      const decision = decideRetry({ error, attempt, maxRetries, headers: error?.headers ?? {} });\n      if (onRetry) onRetry(decision, error);\n      if (!decision.retry) break;\n      await sleep(decision.delay_ms);\n    }\n  }\n  throw lastError;\n}\n\nfunction defaultSleep(ms) {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\n/** Simple token-bucket guard so a workflow paces itself against a provider. */\nfunction rateLimiter({ perMinute = 60 } = {}) {\n  const intervalMs = 60000 / perMinute;\n  let nextAt = 0;\n  return {\n    async take(sleep = defaultSleep) {\n      const now = Date.now();\n      const wait = Math.max(0, nextAt - now);\n      nextAt = Math.max(now, nextAt) + intervalMs;\n      if (wait > 0) await sleep(wait);\n      return wait;\n    }\n  };\n}\n\n// ---- node logic ----\nconst out = [];\nfor (const item of $input.all()) {\n  const json = item.json || {};\n  const error = json.error || json.$error || json;\n  const status = error.status || error.httpCode || json.statusCode || null;\n  const decision = decideRetry({\n    error: { status, message: error.message || error.description || JSON.stringify(error).slice(0, 500) },\n    attempt: (json.retry_count || 0) + 1,\n    maxRetries: 3,\n    headers: json.headers || {}\n  });\n  out.push({ json: {\n    lead_id: json.lead_id ?? null,\n    campaign_id: json.campaign_id ?? null,\n    workflow: \"wf02-clean-dedupe\",\n    provider: json.provider ?? null,\n    http_status: status,\n    error_type: decision.error_type,\n    error_message: error.message || String(error).slice(0, 500),\n    retryable: decision.retryable,\n    dead_letter: decision.dead_letter,\n    delay_ms: decision.delay_ms,\n    payload: { node: json.node ?? null, stage: json.stage ?? null }\n  } });\n}\nreturn out;\n"
+      },
+      "id": "19a90413f03c980a2ccb8e37",
+      "name": "Classify Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        680
+      ],
+      "notes": "Uses the same classifier as the test suite: 429 backs off, 5xx retries, 401/422 dead-letters immediately."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/fail_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id || null,\n    p_workflow: \"wf02-clean-dedupe\",\n    p_error_type: $json.error_type || 'unknown',\n    p_message: String($json.error_message || $json.error || 'unknown error').slice(0, 2000),\n    p_node: \"Apply Cleaning Rules\",\n    p_provider: $json.provider || null,\n    p_http_status: $json.http_status || null,\n    p_payload: $json.payload || {},\n    p_max_retries: 3,\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "39bb613ac6ca9cc7607787cd",
+      "name": "Record Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        680
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The failed-item queue. The lead returns to its stage with an incremented retry count and an exponential backoff; the rest of the batch is unaffected."
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called By Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Campaign + Niche": {
+      "main": [
+        [
+          {
+            "node": "Claim SCRAPED Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim SCRAPED Leads": {
+      "main": [
+        [
+          {
+            "node": "Fetch Company Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Company Record": {
+      "main": [
+        [
+          {
+            "node": "Apply Cleaning Rules",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Cleaning Rules": {
+      "main": [
+        [
+          {
+            "node": "Keep or Drop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep or Drop": {
+      "main": [
+        [
+          {
+            "node": "Store Cleaning Flags",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Drop Reason",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Cleaning Flags": {
+      "main": [
+        [
+          {
+            "node": "Advance To CLEANED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Drop Reason": {
+      "main": [
+        [
+          {
+            "node": "Advance To DISQUALIFIED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Failure": {
+      "main": [
+        [
+          {
+            "node": "Record Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "cleaning"
+    }
+  ],
+  "meta": {
+    "description": "Normalise, filter and de-duplicate scraped leads.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "e51fe5c26313b755af080077"
+}

@@ -1,0 +1,908 @@
+{
+  "name": "wf05-research",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/20 6-20 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "552ab3bc2158a248885c745e",
+      "name": "Every 20 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "e55f04a548b2089c8007e52d",
+      "name": "Called By Orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        490
+      ],
+      "notes": "Input: { campaign_id, batch_size?, execution_id? }"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?id=eq.{{ $json.campaign_id || $env.DEFAULT_CAMPAIGN_ID }}&select=*,niche:niches(*)",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "d97e03eda4f34fabc805d50b",
+      "name": "Load Campaign + Niche",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "One read per run. Campaign settings - ICP band, thresholds, daily targets, follow-up offsets - all come from here, never from node parameters."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/claim_leads",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_campaign_id: $json.id || $json.campaign_id, p_stage: 'QUALIFIED', p_limit: $json.batch_size || 25, p_worker: 'wf05-research', p_stale_minutes: 20, p_max_retries: 3 }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "578932251772bc5f620a4324",
+      "name": "Claim QUALIFIED Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "SELECT ... FOR UPDATE SKIP LOCKED, so parallel executions never hand the same lead to two workers. A claim older than 20 minutes is treated as abandoned and reissued, which is how a crashed run resumes instead of stranding leads at QUALIFIED."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ ($('Load Campaign + Niche').first().json.research?.only_for_bands ?? [\"HIGH_PRIORITY\",\"QUALIFIED\"]).includes($json.icp_band) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "021b8845a743efd9df041c32",
+      "name": "In A Researched Band?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        980,
+        300
+      ],
+      "notes": "REVIEW-band leads are not researched automatically - a human decides whether they are worth the tokens."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/v_leads_full?lead_id=eq.{{ $json.id }}&select=*",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "f4eecc63e6690ef932f8c663",
+      "name": "Fetch Lead Detail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"NEW\", notes: \"Held at REVIEW band - research skipped by campaign policy\" }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "5bb66823ce8a83a63e603ac1",
+      "name": "Hold For Manual Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        490
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/prompts.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Prompt loading and rendering.\n// Prompts live in prompts/*.md as plain text with front matter, so they can be\n// reviewed and diffed like code. n8n/build.mjs inlines them into the workflow\n// JSON at build time; Node tooling reads them from disk.\n//\n// Placeholders:\n//   {{name}}        required string - rendering throws if it is missing\n//   {{name?}}       optional - renders as \"(not available)\" when missing\n//   {{json:name}}   pretty-printed JSON block\n//   {{list:name}}   array rendered as \"- item\" lines\n// ---------------------------------------------------------------------------\n\nconst PLACEHOLDER = /\\{\\{\\s*(json:|list:)?([a-zA-Z0-9_.]+)(\\?)?\\s*\\}\\}/g;\n\n/** Split `---` front matter from the prompt body. */\nfunction parseFrontMatter(text) {\n  const raw = String(text);\n  if (!raw.startsWith('---')) return { meta: {}, body: raw.trim() };\n  const end = raw.indexOf('\\n---', 3);\n  if (end === -1) return { meta: {}, body: raw.trim() };\n\n  const meta = {};\n  for (const line of raw.slice(3, end).split('\\n')) {\n    const match = line.match(/^\\s*([a-z_]+)\\s*:\\s*(.+?)\\s*$/i);\n    if (!match) continue;\n    const [, key, value] = match;\n    meta[key] = /^\\d+(\\.\\d+)?$/.test(value) ? Number(value)\n      : value === 'true' ? true\n      : value === 'false' ? false\n      : value.replace(/^[\"']|[\"']$/g, '');\n  }\n  return { meta, body: raw.slice(end + 4).trim() };\n}\n\nfunction lookup(vars, path) {\n  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), vars);\n}\n\n/** Fill a prompt template. Throws on a missing required variable. */\nfunction renderTemplate(template, vars = {}) {\n  const missing = [];\n  const out = String(template).replace(PLACEHOLDER, (_match, kind, name, optional) => {\n    const value = lookup(vars, name);\n    const absent = value === undefined || value === null || value === '';\n\n    if (absent) {\n      if (!optional) { missing.push(name); return ''; }\n      return kind === 'json:' ? '{}' : kind === 'list:' ? '- (none)' : '(not available)';\n    }\n    if (kind === 'json:') return JSON.stringify(value, null, 2);\n    if (kind === 'list:') {\n      const items = Array.isArray(value) ? value : [value];\n      return items.length ? items.map((v) => `- ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\\n') : '- (none)';\n    }\n    return Array.isArray(value) ? value.join(', ') : String(value);\n  });\n\n  if (missing.length) {\n    throw new Error(`renderTemplate: missing required variables: ${[...new Set(missing)].join(', ')}`);\n  }\n  return out;\n}\n\n/** Variables a template expects, for validation and documentation. */\nfunction templateVariables(template) {\n  const required = new Set();\n  const optional = new Set();\n  for (const match of String(template).matchAll(PLACEHOLDER)) {\n    (match[3] ? optional : required).add(match[2]);\n  }\n  return { required: [...required], optional: [...optional] };\n}\n\n/**\n * Render a prompt from a registry entry.\n * @param {object} prompt { meta, body } as produced by parseFrontMatter\n */\nfunction renderPrompt(prompt, vars = {}) {\n  const body = renderTemplate(prompt.body ?? prompt, vars);\n  return {\n    prompt: body,\n    model: prompt.meta?.model ?? 'default',\n    max_tokens: prompt.meta?.max_tokens ?? 2000,\n    temperature: prompt.meta?.temperature ?? 0.2,\n    schema_name: prompt.meta?.schema ?? null,\n    version: prompt.meta?.version ?? '1'\n  };\n}\n\n// ---- lib/normalize.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Normalisation primitives.\n// Everything that turns messy scraped text into a comparable value lives here.\n// Pure functions only - no I/O - so the same code runs in tests, in n8n Code\n// nodes (inlined by n8n/build.mjs) and in scripts.\n// ---------------------------------------------------------------------------\n\nconst US_STATES = {\n  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',\n  colorado: 'CO', connecticut: 'CT', delaware: 'DE', 'district of columbia': 'DC',\n  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL',\n  indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',\n  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',\n  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',\n  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',\n  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK',\n  oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',\n  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',\n  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI',\n  wyoming: 'WY'\n};\n\nconst STATE_CODES = new Set(Object.values(US_STATES));\n\n// Legal-entity and decorative suffixes that must not make two rows look different.\nconst NAME_NOISE = [\n  'llc', 'l l c', 'inc', 'inc.', 'incorporated', 'corp', 'corporation', 'co',\n  'company', 'ltd', 'limited', 'plc', 'pllc', 'pc', 'pa', 'dds', 'md', 'dmd',\n  'the', 'official', 'shop', 'store', 'usa', 'us'\n];\n\nfunction stripDiacritics(value) {\n  return String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');\n}\n\nfunction collapseWhitespace(value) {\n  return String(value ?? '').replace(/\\s+/g, ' ').trim();\n}\n\n/** Display-safe business name: trimmed, de-emojied, single-spaced. */\nfunction cleanBusinessName(value) {\n  if (!value) return null;\n  const cleaned = collapseWhitespace(\n    stripDiacritics(value)\n      .replace(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{FE0F}\\u{200D}]/gu, ' ')\n      .replace(/[|•·–—]+/g, ' ')\n  );\n  return cleaned || null;\n}\n\n/**\n * Comparison key for a business name. Lowercase, no punctuation, no legal\n * suffixes, no filler words. \"Glow Med Spa, LLC\" and \"glow medspa\" collapse to\n * the same key, which is what the dedupe layer matches on.\n */\nfunction normalizeBusinessName(value) {\n  const base = cleanBusinessName(value);\n  if (!base) return null;\n  const tokens = base\n    .toLowerCase()\n    .replace(/&/g, ' and ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .split(/\\s+/)\n    .filter(Boolean)\n    .filter((t) => !NAME_NOISE.includes(t));\n  // \"med spa\" -> \"medspa\", \"hair salon\" -> \"hairsalon\" is too aggressive; only\n  // collapse the two-token forms that are genuinely written both ways.\n  const joined = tokens.join(' ')\n    .replace(/\\bmed spa\\b/g, 'medspa')\n    .replace(/\\bday spa\\b/g, 'dayspa')\n    .replace(/\\be commerce\\b/g, 'ecommerce');\n  return joined || null;\n}\n\n/** Instagram handle without @, url wrapper, query string or trailing slash. */\nfunction normalizeHandle(value) {\n  if (!value) return null;\n  let handle = String(value).trim();\n  const urlMatch = handle.match(/instagram\\.com\\/([^/?#]+)/i);\n  if (urlMatch) handle = urlMatch[1];\n  handle = handle.replace(/^@+/, '').replace(/\\/+$/, '').split('?')[0].trim().toLowerCase();\n  if (!handle) return null;\n  // Instagram handles: letters, numbers, periods, underscores, max 30 chars.\n  if (!/^[a-z0-9._]{1,30}$/.test(handle)) return null;\n  const reserved = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'accounts', 'direct', 'tv']);\n  if (reserved.has(handle)) return null;\n  return handle;\n}\n\nfunction instagramUrl(handle) {\n  const h = normalizeHandle(handle);\n  return h ? `https://www.instagram.com/${h}/` : null;\n}\n\n/** Absolute, lowercase-host URL with tracking parameters removed. */\nfunction normalizeUrl(value) {\n  if (!value) return null;\n  let raw = String(value).trim();\n  if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null;\n  if (!/^https?:\\/\\//i.test(raw)) raw = `https://${raw}`;\n  let url;\n  try {\n    url = new URL(raw);\n  } catch {\n    return null;\n  }\n  if (!/^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(url.hostname)) return null;\n  for (const key of [...url.searchParams.keys()]) {\n    if (/^(utm_|fbclid|gclid|mc_|ref|source)/i.test(key)) url.searchParams.delete(key);\n  }\n  url.hostname = url.hostname.toLowerCase();\n  url.hash = '';\n  const path = url.pathname.replace(/\\/+$/, '');\n  return `${url.protocol}//${url.hostname}${path}${url.search}`;\n}\n\n// Link-in-bio aggregators are not a website - they must never become a dedupe key.\nconst AGGREGATOR_DOMAINS = new Set([\n  'linktr.ee', 'link.tree', 'beacons.ai', 'bio.link', 'linkin.bio', 'msha.ke',\n  'taplink.cc', 'lnk.bio', 'solo.to', 'campsite.bio', 'linkpop.com', 'many.link',\n  'instagram.com', 'facebook.com', 'm.facebook.com', 'business.facebook.com',\n  'tiktok.com', 'youtube.com', 'twitter.com', 'x.com', 'wa.me', 'api.whatsapp.com',\n  'g.page', 'goo.gl', 'maps.google.com', 'yelp.com', 'booksy.com', 'vagaro.com',\n  'square.site', 'squareup.com', 'calendly.com', 'sites.google.com'\n]);\n\nfunction isAggregatorDomain(domain) {\n  if (!domain) return false;\n  const d = String(domain).toLowerCase().replace(/^www\\./, '');\n  return AGGREGATOR_DOMAINS.has(d);\n}\n\n/** Registrable-ish domain: host without www, aggregators rejected. */\nfunction normalizeDomain(value) {\n  const url = normalizeUrl(value);\n  if (!url) return null;\n  let host;\n  try {\n    host = new URL(url).hostname.toLowerCase().replace(/^www\\./, '');\n  } catch {\n    return null;\n  }\n  if (isAggregatorDomain(host)) return null;\n  return host;\n}\n\n/** US phone to E.164. Anything that is not a plausible US number returns null. */\nfunction normalizePhone(value, defaultCountry = '1') {\n  if (!value) return null;\n  const raw = String(value);\n  if (/ext|x\\d{3,}/i.test(raw) === false && raw.trim().startsWith('+')) {\n    const intl = raw.replace(/[^\\d+]/g, '');\n    if (/^\\+\\d{8,15}$/.test(intl)) return intl;\n  }\n  const digits = raw.replace(/\\D/g, '');\n  if (!digits) return null;\n  let national = digits;\n  if (national.length === 11 && national.startsWith('1')) national = national.slice(1);\n  if (national.length !== 10) return null;\n  if (/^[01]/.test(national)) return null;              // invalid NANP area code\n  if (/^(\\d)\\1{9}$/.test(national)) return null;        // 5555555555 style junk\n  return `+${defaultCountry}${national}`;\n}\n\nfunction normalizeEmail(value) {\n  if (!value) return null;\n  const email = String(value).trim().toLowerCase().replace(/^mailto:/, '');\n  if (!/^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/.test(email)) return null;\n  const local = email.split('@')[0];\n  if (/^(noreply|no-reply|donotreply|postmaster|abuse|privacy)$/.test(local)) return null;\n  return email;\n}\n\n/** Accepts \"California\", \"california\", \"CA\", \"Calif.\" -> \"CA\". */\nfunction normalizeState(value) {\n  if (!value) return null;\n  const raw = String(value).trim();\n  const upper = raw.toUpperCase();\n  if (STATE_CODES.has(upper)) return upper;\n  const key = stripDiacritics(raw).toLowerCase().replace(/[^a-z\\s]/g, '').trim();\n  if (US_STATES[key]) return US_STATES[key];\n  const prefix = Object.keys(US_STATES).find((name) => name.startsWith(key) && key.length >= 4);\n  return prefix ? US_STATES[prefix] : null;\n}\n\nfunction normalizeCity(value) {\n  if (!value) return null;\n  const city = collapseWhitespace(stripDiacritics(value).replace(/[^\\p{L}\\s.'-]/gu, ' '));\n  if (!city || city.length < 2) return null;\n  return city\n    .toLowerCase()\n    .split(' ')\n    .map((w) => (w.length > 2 || /^(st|ft)$/.test(w) ? w[0].toUpperCase() + w.slice(1) : w))\n    .join(' ');\n}\n\nfunction slug(value) {\n  return stripDiacritics(String(value ?? ''))\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '')\n    .slice(0, 40);\n}\n\n/** \"12.3k\" / \"1,234\" / \"2.1M\" -> integer. */\nfunction parseCount(value) {\n  if (value === null || value === undefined || value === '') return null;\n  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;\n  const raw = String(value).trim().toLowerCase().replace(/,/g, '').replace(/\\s/g, '');\n  const match = raw.match(/^([\\d.]+)([km])?$/);\n  if (!match) return null;\n  const n = Number.parseFloat(match[1]);\n  if (!Number.isFinite(n)) return null;\n  const mult = match[2] === 'k' ? 1e3 : match[2] === 'm' ? 1e6 : 1;\n  return Math.round(n * mult);\n}\n\nfunction toIsoDate(value) {\n  if (!value) return null;\n  const d = value instanceof Date ? value : new Date(value);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString();\n}\n\nfunction daysSince(value, now = new Date()) {\n  const iso = toIsoDate(value);\n  if (!iso) return null;\n  return Math.floor((now.getTime() - new Date(iso).getTime()) / 86400000);\n}\n\n/**\n * Normalise a raw discovery row into the canonical lead shape every downstream\n * step expects. Unknown provider fields are kept under `raw`.\n */\nfunction normalizeRawLead(raw = {}) {\n  const pick = (...keys) => {\n    for (const k of keys) {\n      const v = k.split('.').reduce((o, part) => (o == null ? o : o[part]), raw);\n      if (v !== undefined && v !== null && v !== '') return v;\n    }\n    return null;\n  };\n\n  const name = cleanBusinessName(pick('business_name', 'name', 'title', 'fullName', 'ownerFullName'));\n  const handle = normalizeHandle(pick('instagram_handle', 'username', 'instagram', 'instagramUrl', 'instagram_url'));\n  const website = normalizeUrl(pick('website', 'url', 'externalUrl', 'external_url', 'site'));\n  const domain = normalizeDomain(website);\n  const state = normalizeState(pick('state', 'region', 'administrativeArea', 'address.state'));\n  const city = normalizeCity(pick('city', 'locality', 'address.city'));\n  const products = toProductList(pick('products_services', 'products', 'services', 'menu', 'categories'));\n\n  return {\n    business_name: name,\n    name_normalized: normalizeBusinessName(name),\n    instagram_handle: handle,\n    instagram_url: instagramUrl(handle) ?? normalizeUrl(pick('instagram_url', 'instagramUrl')),\n    website,\n    website_domain: domain,\n    email: normalizeEmail(pick('email', 'emails.0', 'contact_email')),\n    phone: pick('phone', 'phoneNumber', 'phone_number', 'telephone'),\n    phone_e164: normalizePhone(pick('phone', 'phoneNumber', 'phone_number', 'telephone')),\n    country: pick('country', 'countryCode') ?? 'US',\n    state,\n    city,\n    postal_code: pick('postal_code', 'postalCode', 'zip'),\n    address: pick('address', 'formattedAddress', 'street'),\n    latitude: numberOrNull(pick('latitude', 'location.lat', 'lat')),\n    longitude: numberOrNull(pick('longitude', 'location.lng', 'lng')),\n    category: pick('category', 'categoryName', 'businessCategoryName', 'business_category'),\n    bio: pick('bio', 'biography', 'description'),\n    website_description: pick('website_description', 'meta_description'),\n    products_services: products,\n    products_count: products.length || parseCount(pick('products_count', 'productsCount')),\n    ig_followers: parseCount(pick('ig_followers', 'followersCount', 'followers', 'follower_count')),\n    ig_following: parseCount(pick('ig_following', 'followsCount', 'following')),\n    ig_posts: parseCount(pick('ig_posts', 'postsCount', 'posts', 'media_count')),\n    ig_is_business: boolOrNull(pick('ig_is_business', 'isBusinessAccount', 'is_business_account')),\n    ig_is_private: boolOrNull(pick('ig_is_private', 'private', 'is_private')),\n    ig_is_verified: boolOrNull(pick('ig_is_verified', 'verified', 'is_verified')),\n    ig_last_post_at: toIsoDate(pick('ig_last_post_at', 'latestPostDate', 'last_post_at')),\n    ig_external_url: normalizeUrl(pick('externalUrl', 'external_url', 'bio_link')),\n    place_id: pick('place_id', 'placeId', 'fid'),\n    source: pick('source', '_source') ?? 'unknown',\n    source_search_term: pick('search_term', 'searchString', 'query'),\n    raw\n  };\n}\n\nfunction numberOrNull(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction boolOrNull(v) {\n  if (v === true || v === false) return v;\n  if (v === 'true') return true;\n  if (v === 'false') return false;\n  return null;\n}\n\n/** Products/services arrive as arrays, comma strings or objects. */\nfunction toProductList(value) {\n  if (!value) return [];\n  let items = [];\n  if (Array.isArray(value)) items = value;\n  else if (typeof value === 'string') items = value.split(/[,;|\\n]/);\n  else if (typeof value === 'object') items = Object.values(value);\n  const seen = new Set();\n  const out = [];\n  for (const item of items) {\n    const label = collapseWhitespace(\n      typeof item === 'string' ? item : (item?.name ?? item?.title ?? item?.label ?? '')\n    );\n    if (!label || label.length < 2 || label.length > 120) continue;\n    const key = label.toLowerCase();\n    if (seen.has(key)) continue;\n    seen.add(key);\n    out.push(label);\n  }\n  return out;\n}\n\n// ---- node logic ----\nconst PROMPT = {\n  \"meta\": {\n    \"id\": \"research\",\n    \"version\": \"1.0.0\",\n    \"model\": \"heavy\",\n    \"max_tokens\": 2500,\n    \"temperature\": 0.3,\n    \"schema\": \"research\"\n  },\n  \"body\": \"ROLE\\n\\nYou are a business research analyst for OptiFlow Solutions, a BPO and customer-experience outsourcing company. You write the short brief that a salesperson reads immediately before writing a first Instagram DM.\\n\\nThe brief has one purpose: give the writer something SPECIFIC and TRUE to open with, plus a grounded reason OptiFlow is relevant to this particular business.\\n\\nINPUT\\n\\nBusiness\\n- Name: {{lead.business_name}}\\n- Instagram: @{{lead.instagram_handle}} - {{lead.ig_followers?}} followers, {{lead.ig_posts?}} posts, last post {{lead.days_since_last_post?}} days ago\\n- Bio: {{lead.bio?}}\\n- Website: {{lead.website?}}\\n- Website description: {{lead.website_description?}}\\n- Category: {{lead.category?}}\\n- Location: {{lead.city?}}, {{lead.state?}}\\n- Products/services ({{lead.products_count?}}):\\n{{list:lead.products_services}}\\n- Recent post captions / content signals:\\n{{list:lead.content_signals}}\\n\\nNiche context\\n- Niche: {{niche.name}} ({{niche.business_model}})\\n- Typical pain points in this niche:\\n{{list:niche.pain_points}}\\n- OptiFlow services that usually fit this niche:\\n{{list:niche.recommended_services}}\\n- Available outreach angles (pick one id):\\n{{json:niche.outreach_angles}}\\n\\nQualification result\\n- ICP score: {{qualification.icp_score}} ({{qualification.band}})\\n- Qualification reason: {{qualification.reason}}\\n- Pain points flagged at qualification:\\n{{list:qualification.potential_pain_points}}\\n\\nDecision maker\\n- Target: {{decision_maker.target_contact?}} ({{decision_maker.contact_role?}})\\n- Why: {{decision_maker.why_this_person?}}\\n\\nTASK\\n\\nWrite the brief. Every field must be grounded in the input above.\\n\\nThe most important field is `specific_observations`: 2 to 4 things that are demonstrably true about THIS business and could open a message. A good observation is something the business would recognise instantly about itself - a named product line, a stated CTA, a treatment menu, a visible pattern in what they post, a shipping or booking detail. A bad observation is a compliment (\\\"love your feed\\\"), a generic statement (\\\"you're growing fast\\\") or anything you had to assume.\\n\\nQUALIFICATION RULES\\n\\n- Never state anything you cannot point to in the input. If you infer, mark it as an inference inside the text itself (\\\"their bio suggests...\\\").\\n- `cx_needs` and `operational_pain_points` must be specific to this business. \\\"They probably get customer questions\\\" is worthless. \\\"Their bio routes pricing questions to DMs while the clinic runs appointments all day\\\" is useful.\\n- `why_optiflow_relevant` must connect ONE identified pain point to ONE OptiFlow capability. Not a service list.\\n- Pick `recommended_angle` from the supplied ids.\\n- `confidence` reflects how much of the brief is grounded versus inferred.\\n- `evidence` lists which input fields you actually used (for example \\\"bio\\\", \\\"products_services\\\", \\\"website_description\\\").\\n- Do not use gendered pronouns for any person; use their name or \\\"they\\\".\\n\\nOUTPUT FORMAT\\n\\nReturn ONLY a JSON object. No prose, no markdown fence.\\n\\nJSON SCHEMA\\n\\n{\\n  \\\"business_summary\\\": \\\"3-5 sentences: what this business is, in plain language\\\",\\n  \\\"what_they_sell\\\": \\\"concrete products or services\\\",\\n  \\\"who_their_customers_are\\\": \\\"who buys from them, inferred from the evidence\\\",\\n  \\\"instagram_focus\\\": \\\"what their Instagram is actually used for\\\",\\n  \\\"business_model\\\": \\\"local_service|ecommerce_brand|hybrid\\\",\\n  \\\"likely_decision_maker\\\": { \\\"name\\\": \\\"...|null\\\", \\\"role\\\": \\\"...|null\\\", \\\"why\\\": \\\"...\\\" },\\n  \\\"cx_needs\\\": [\\\"2-4 specific customer-experience needs\\\"],\\n  \\\"operational_pain_points\\\": [\\\"2-4 specific operational pain points\\\"],\\n  \\\"specific_observations\\\": [\\\"2-4 openers that are true and checkable\\\"],\\n  \\\"why_optiflow_relevant\\\": \\\"2-3 sentences linking one pain point to one capability\\\",\\n  \\\"recommended_service\\\": \\\"one OptiFlow service\\\",\\n  \\\"recommended_angle\\\": \\\"one angle id from the list\\\",\\n  \\\"confidence\\\": 0.0-1.0,\\n  \\\"evidence\\\": [\\\"input fields used\\\"]\\n}\\n\\nEDGE CASES\\n\\n- Thin input (bio only, no website): write a shorter brief, set confidence below 0.5, and make observations only from what exists. Never pad with invention.\\n- The business appears to already outsource support (bio mentions a support team, published SLAs, a help centre): say so explicitly in why_optiflow_relevant and reframe the angle towards coverage gaps (after hours, weekends, peak). Do not pretend the gap exists if it does not.\\n- Content in another language: summarise in English and note the language - it may matter for support staffing.\\n- Signals conflict with the niche (for example a pet brand that mostly posts personal content): describe what you actually see, and lower confidence.\\n- Business looks dormant (no recent posts): say so plainly. The brief should tell the writer this is a weaker prospect.\"\n};\n\nconst campaign = $('Load Campaign + Niche').first().json;\nconst niche = campaign.niche || {};\nconst out = [];\n\nfor (const item of $input.all()) {\n  const row = Array.isArray(item.json) ? item.json[0] : item.json;\n  if (!row || !row.lead_id) continue;\n\n  const lead = {\n    business_name: row.business_name,\n    instagram_handle: row.instagram_handle,\n    ig_followers: row.ig_followers,\n    ig_posts: row.ig_posts,\n    bio: row.bio,\n    website: row.website,\n    website_description: row.website_description,\n    category: row.niche_name,\n    city: row.city,\n    state: row.state,\n    products_services: row.products_services || [],\n    products_count: row.products_count,\n    days_since_last_post: daysSince(row.ig_last_post_at),\n    content_signals: row.content_signals || []\n  };\n\n  const rendered = renderPrompt(PROMPT, {\n    lead, niche,\n    qualification: {\n      icp_score: row.icp_score,\n      band: row.icp_band,\n      reason: row.qualification_reason || 'not recorded',\n      potential_pain_points: row.potential_pain_points || []\n    },\n    decision_maker: {\n      target_contact: row.decision_maker,\n      contact_role: row.decision_maker_title,\n      why_this_person: row.decision_maker_reason\n    }\n  });\n\n  out.push({ json: {\n    lead_id: row.lead_id,\n    campaign_id: row.campaign_id,\n    prompt: rendered.prompt,\n    model: campaign.research?.model || $env.ANTHROPIC_MODEL_HEAVY || 'claude-opus-5',\n    max_tokens: rendered.max_tokens,\n    temperature: rendered.temperature,\n    prompt_version: rendered.version\n  } });\n}\nreturn out;\n"
+      },
+      "id": "a736b71630ecff3209a33011",
+      "name": "Render Research Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, temperature: $json.temperature, messages: [{ role: 'user', content: $json.prompt }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a0a89c5a7a4ae44b94c4ef7e",
+      "name": "Claude: Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api-key",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/validate.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Minimal JSON Schema validator (draft-07 subset).\n// Deliberately dependency-free: it runs unchanged inside an n8n Code node,\n// where npm packages are not available by default. Supports the keywords the\n// AI output schemas in schemas/ actually use.\n// ---------------------------------------------------------------------------\n\nconst TYPE_CHECKS = {\n  object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v),\n  array: Array.isArray,\n  string: (v) => typeof v === 'string',\n  number: (v) => typeof v === 'number' && Number.isFinite(v),\n  integer: (v) => Number.isInteger(v),\n  boolean: (v) => typeof v === 'boolean',\n  null: (v) => v === null\n};\n\nfunction typeMatches(value, type) {\n  if (Array.isArray(type)) return type.some((t) => typeMatches(value, t));\n  const check = TYPE_CHECKS[type];\n  return check ? check(value) : true;\n}\n\n/**\n * @returns {{ valid: boolean, errors: string[] }}\n */\nfunction validate(value, schema, path = '$') {\n  const errors = [];\n  if (!schema || typeof schema !== 'object') return { valid: true, errors };\n\n  if (schema.type && !typeMatches(value, schema.type)) {\n    errors.push(`${path}: expected ${Array.isArray(schema.type) ? schema.type.join('|') : schema.type}, got ${describe(value)}`);\n    return { valid: false, errors };\n  }\n\n  if (schema.enum && !schema.enum.includes(value)) {\n    errors.push(`${path}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`);\n  }\n  if (schema.const !== undefined && value !== schema.const) {\n    errors.push(`${path}: must equal ${JSON.stringify(schema.const)}`);\n  }\n\n  if (typeof value === 'string') {\n    if (schema.minLength != null && value.length < schema.minLength) errors.push(`${path}: shorter than ${schema.minLength}`);\n    if (schema.maxLength != null && value.length > schema.maxLength) errors.push(`${path}: longer than ${schema.maxLength} (${value.length})`);\n    if (schema.pattern && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: does not match /${schema.pattern}/`);\n  }\n\n  if (typeof value === 'number') {\n    if (schema.minimum != null && value < schema.minimum) errors.push(`${path}: below minimum ${schema.minimum}`);\n    if (schema.maximum != null && value > schema.maximum) errors.push(`${path}: above maximum ${schema.maximum}`);\n  }\n\n  if (Array.isArray(value)) {\n    if (schema.minItems != null && value.length < schema.minItems) errors.push(`${path}: needs at least ${schema.minItems} items`);\n    if (schema.maxItems != null && value.length > schema.maxItems) errors.push(`${path}: at most ${schema.maxItems} items`);\n    if (schema.items) {\n      value.forEach((item, i) => {\n        errors.push(...validate(item, schema.items, `${path}[${i}]`).errors);\n      });\n    }\n    if (schema.uniqueItems) {\n      const seen = new Set(value.map((v) => JSON.stringify(v)));\n      if (seen.size !== value.length) errors.push(`${path}: items must be unique`);\n    }\n  }\n\n  if (TYPE_CHECKS.object(value)) {\n    for (const key of schema.required ?? []) {\n      if (!(key in value) || value[key] === undefined) errors.push(`${path}.${key}: required property missing`);\n    }\n    for (const [key, sub] of Object.entries(schema.properties ?? {})) {\n      if (key in value && value[key] !== undefined) {\n        errors.push(...validate(value[key], sub, `${path}.${key}`).errors);\n      }\n    }\n    if (schema.additionalProperties === false) {\n      const allowed = new Set(Object.keys(schema.properties ?? {}));\n      for (const key of Object.keys(value)) {\n        if (!allowed.has(key)) errors.push(`${path}.${key}: unexpected property`);\n      }\n    }\n  }\n\n  return { valid: errors.length === 0, errors };\n}\n\nfunction assertValid(value, schema, label = 'payload') {\n  const { valid, errors } = validate(value, schema);\n  if (!valid) {\n    const error = new Error(`${label} failed schema validation: ${errors.slice(0, 8).join('; ')}`);\n    error.name = 'SchemaValidationError';\n    error.errors = errors;\n    throw error;\n  }\n  return value;\n}\n\nfunction describe(value) {\n  if (value === null) return 'null';\n  if (Array.isArray(value)) return 'array';\n  return typeof value;\n}\n\n// ---- lib/json.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Getting structured JSON back out of a language model, reliably.\n// The prompts all demand strict JSON, but a wrapper sentence or a fenced block\n// still shows up occasionally. This module recovers the object, validates it\n// against the schema, and tells the caller whether a retry is warranted -\n// nothing downstream ever sees half-parsed data.\n// ---------------------------------------------------------------------------\n\n/** Pull the first balanced JSON object/array out of a model response. */\nfunction extractJson(text) {\n  if (text == null) return null;\n  if (typeof text === 'object') return text;\n  const raw = String(text).trim();\n\n  const direct = tryParse(raw);\n  if (direct !== undefined) return direct;\n\n  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/i);\n  if (fenced) {\n    const parsed = tryParse(fenced[1].trim());\n    if (parsed !== undefined) return parsed;\n  }\n\n  const start = raw.search(/[{[]/);\n  if (start === -1) return null;\n  const opener = raw[start];\n  const closer = opener === '{' ? '}' : ']';\n  let depth = 0;\n  let inString = false;\n  let escaped = false;\n\n  for (let i = start; i < raw.length; i += 1) {\n    const ch = raw[i];\n    if (inString) {\n      if (escaped) escaped = false;\n      else if (ch === '\\\\') escaped = true;\n      else if (ch === '\"') inString = false;\n      continue;\n    }\n    if (ch === '\"') { inString = true; continue; }\n    if (ch === opener) depth += 1;\n    else if (ch === closer) {\n      depth -= 1;\n      if (depth === 0) {\n        const parsed = tryParse(raw.slice(start, i + 1));\n        if (parsed !== undefined) return parsed;\n        break;\n      }\n    }\n  }\n  return null;\n}\n\nfunction tryParse(text) {\n  try {\n    return JSON.parse(text);\n  } catch {\n    return undefined;\n  }\n}\n\n/**\n * Parse + validate a model response.\n * @returns {{ ok, data, errors, retry_prompt }}\n * `retry_prompt` is the exact correction to send back on a schema failure.\n */\nfunction parseAiJson(text, schema, { label = 'AI response' } = {}) {\n  const data = extractJson(text);\n  if (data === null) {\n    return {\n      ok: false,\n      data: null,\n      errors: [`${label}: no JSON object found in the response`],\n      retry_prompt: 'Your previous response was not valid JSON. Return ONLY the JSON object described in the OUTPUT FORMAT section, with no prose, no markdown fence and no explanation.'\n    };\n  }\n  if (!schema) return { ok: true, data, errors: [], retry_prompt: null };\n\n  const { valid, errors } = validate(data, schema);\n  if (valid) return { ok: true, data, errors: [], retry_prompt: null };\n\n  return {\n    ok: false,\n    data,\n    errors,\n    retry_prompt:\n      `Your previous response did not satisfy the required schema. Fix exactly these problems and return ONLY the corrected JSON object:\\n` +\n      errors.slice(0, 10).map((e) => `- ${e}`).join('\\n')\n  };\n}\n\n/** Deep-clone + drop undefined so the object is safe to store as jsonb. */\nfunction jsonSafe(value) {\n  return JSON.parse(JSON.stringify(value ?? null));\n}\n\n// ---- lib/angles.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Outreach angle selection.\n// Each niche ships its own angle list (config/niches.json). The AI picks one\n// and justifies it; this module validates that choice against the niche and\n// provides a deterministic fallback so a bad model response can never produce\n// a generic \"we are a leading BPO\" message.\n// ---------------------------------------------------------------------------\n\n/** All angles defined for a niche. */\nfunction anglesFor(niche) {\n  return (niche?.outreach_angles ?? []).map((a) => ({ ...a }));\n}\n\nfunction angleById(niche, id) {\n  return anglesFor(niche).find((a) => a.id === id) ?? null;\n}\n\n/**\n * Deterministic pick, used as the fallback and as a sanity check on the AI.\n * Signals come from the enriched lead and the research brief.\n */\nfunction pickAngle(niche, { lead = {}, research = {}, campaign = {} } = {}) {\n  const override = campaign?.outreach?.angle_override;\n  if (override) {\n    const forced = angleById(niche, override);\n    if (forced) return { angle: forced, reason: 'campaign angle_override', source: 'campaign' };\n  }\n\n  const angles = anglesFor(niche);\n  if (!angles.length) return { angle: null, reason: 'niche has no angles configured', source: 'none' };\n\n  const text = [\n    lead.bio, lead.website_description, lead.category,\n    ...(lead.products_services ?? []),\n    research.business_summary, research.instagram_focus,\n    ...(research.operational_pain_points ?? []).map((p) => (typeof p === 'string' ? p : p?.pain ?? '')),\n    ...(research.cx_needs ?? []).map((p) => (typeof p === 'string' ? p : p?.need ?? ''))\n  ].filter(Boolean).join(' ').toLowerCase();\n\n  const scored = angles.map((angle) => {\n    let score = 0;\n    const words = `${angle.label} ${angle.hook} ${angle.when ?? ''}`.toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 4);\n    for (const w of new Set(words)) if (text.includes(w)) score += 1;\n    // Angle-specific signals that matter more than word overlap.\n    if (angle.id === 'after_hours' && /after hours|24\\/7|weekend|evening|closed/.test(text)) score += 3;\n    if (angle.id === 'speed_to_lead' && /dm (us|for)|message us|inquir|pricing/.test(text)) score += 3;\n    if (angle.id === 'order_questions' && /order|shipping|tracking|delivery/.test(text)) score += 3;\n    if (angle.id === 'sizing_questions' && /size|sizing|fit|measurement/.test(text)) score += 3;\n    if (angle.id === 'returns' && /return|exchange|refund/.test(text)) score += 3;\n    if (angle.id === 'technical_questions' && /setup|troubleshoot|firmware|app|install|compatib/.test(text)) score += 3;\n    if (angle.id === 'warranty' && /warranty|rma|repair|after[- ]sales/.test(text)) score += 3;\n    if (angle.id === 'growth_support' && /growing|scal|launch|drop|sold out|restock/.test(text)) score += 2;\n    return { angle, score };\n  }).sort((a, b) => b.score - a.score);\n\n  const best = scored[0];\n  if (!best.score) {\n    return { angle: angles[0], reason: 'no strong signal - defaulted to the niche primary angle', source: 'default' };\n  }\n  return { angle: best.angle, reason: `matched ${best.score} signal(s) in the business profile`, source: 'signals' };\n}\n\n/**\n * Validate an AI-chosen angle. Returns the angle to actually use.\n * An unknown id never breaks the run - it falls back to the deterministic pick.\n */\nfunction resolveAngle(niche, aiAngleId, context) {\n  const fromAi = aiAngleId ? angleById(niche, aiAngleId) : null;\n  if (fromAi) return { angle: fromAi, reason: 'selected by the qualification/research step', source: 'ai' };\n  const fallback = pickAngle(niche, context);\n  return { ...fallback, source: aiAngleId ? 'fallback_unknown_ai_angle' : fallback.source, rejected_ai_angle: aiAngleId ?? null };\n}\n\n// ---- node logic ----\nconst RESEARCH_SCHEMA = {\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"$id\":\"optiflow/research\",\"title\":\"AI business research brief\",\"type\":\"object\",\"required\":[\"business_summary\",\"what_they_sell\",\"cx_needs\",\"operational_pain_points\",\"specific_observations\",\"why_optiflow_relevant\",\"recommended_service\",\"recommended_angle\",\"confidence\"],\"additionalProperties\":false,\"properties\":{\"business_summary\":{\"type\":\"string\",\"minLength\":60,\"maxLength\":1500},\"what_they_sell\":{\"type\":\"string\",\"minLength\":5,\"maxLength\":600},\"who_their_customers_are\":{\"type\":[\"string\",\"null\"],\"maxLength\":600},\"instagram_focus\":{\"type\":[\"string\",\"null\"],\"maxLength\":600},\"business_model\":{\"type\":[\"string\",\"null\"],\"enum\":[\"local_service\",\"ecommerce_brand\",\"hybrid\",null]},\"likely_decision_maker\":{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"name\":{\"type\":[\"string\",\"null\"],\"maxLength\":120},\"role\":{\"type\":[\"string\",\"null\"],\"maxLength\":120},\"why\":{\"type\":[\"string\",\"null\"],\"maxLength\":600}}},\"cx_needs\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":6,\"items\":{\"type\":\"string\",\"minLength\":10,\"maxLength\":300}},\"operational_pain_points\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":6,\"items\":{\"type\":\"string\",\"minLength\":10,\"maxLength\":300}},\"specific_observations\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":6,\"items\":{\"type\":\"string\",\"minLength\":10,\"maxLength\":400}},\"why_optiflow_relevant\":{\"type\":\"string\",\"minLength\":30,\"maxLength\":900},\"recommended_service\":{\"type\":\"string\",\"minLength\":3,\"maxLength\":120},\"recommended_angle\":{\"type\":\"string\",\"minLength\":2,\"maxLength\":60},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"evidence\":{\"type\":\"array\",\"maxItems\":20,\"items\":{\"type\":\"string\",\"maxLength\":80}}}};\n\nconst campaign = $('Load Campaign + Niche').first().json;\nconst niche = campaign.niche || {};\nconst inputs = $('Render Research Prompt').all().map((i) => i.json);\nconst out = [];\n\nfor (const [index, item] of $input.all().entries()) {\n  const context = inputs[index] ?? inputs[0];\n  const text = (item.json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\\n');\n  const parsed = parseAiJson(text, RESEARCH_SCHEMA, { label: 'research' });\n\n  if (!parsed.ok) {\n    out.push({ json: { ...context, needs_repair: true, repair_prompt: context.prompt + '\\n\\n' + parsed.retry_prompt, schema_errors: parsed.errors } });\n    continue;\n  }\n\n  const research = parsed.data;\n  // An angle the model invented is replaced by a deterministic pick rather than\n  // failing the item - the message must never fall back to a generic pitch.\n  const resolved = resolveAngle(niche, research.recommended_angle, { lead: {}, research, campaign });\n\n  out.push({ json: {\n    ...context,\n    needs_repair: false,\n    research,\n    angle_id: resolved.angle?.id ?? null,\n    angle_source: resolved.source,\n    usage: item.json.usage || {},\n    raw_response: text\n  } });\n}\nreturn out;\n"
+      },
+      "id": "9a517da54b46dab1c68c9e69",
+      "name": "Parse Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.needs_repair ? \"repair\" : \"ok\" }}",
+                    "rightValue": "ok",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "ok"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.needs_repair ? \"repair\" : \"ok\" }}",
+                    "rightValue": "repair",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "repair"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "4ed8c65d5d56b849ec70cc49",
+      "name": "Valid Research?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2180,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, temperature: 0, messages: [{ role: 'user', content: $json.repair_prompt }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "601245261cb745ec55aa2faa",
+      "name": "Claude: Repair Research JSON",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        680
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api-key",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/research",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n      lead_id: $json.lead_id,\n      campaign_id: $json.campaign_id,\n      business_summary: $json.research.business_summary,\n      what_they_sell: $json.research.what_they_sell,\n      who_their_customers_are: $json.research.who_their_customers_are,\n      instagram_focus: $json.research.instagram_focus,\n      business_model: $json.research.business_model,\n      likely_decision_maker: $json.research.likely_decision_maker || {},\n      cx_needs: $json.research.cx_needs,\n      operational_pain_points: $json.research.operational_pain_points,\n      specific_observations: $json.research.specific_observations,\n      why_optiflow_relevant: $json.research.why_optiflow_relevant,\n      recommended_service: $json.research.recommended_service,\n      recommended_angle: $json.angle_id,\n      confidence: $json.research.confidence,\n      evidence: $json.research.evidence || [],\n      model: $json.model,\n      prompt_version: $json.prompt_version,\n      raw_response: { text: $json.raw_response, angle_source: $json.angle_source }\n    }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "514178270506066ea3a22436",
+      "name": "Store Research Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/leads?id=eq.{{ $json.lead_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ outreach_angle: $json.angle_id, recommended_service: $json.research.recommended_service }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "346786e3344602c3d15df287",
+      "name": "Update Lead Angle",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/advance_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id,\n    p_to_stage: \"RESEARCHED\",\n    p_status: \"NEW\",\n    p_step: \"ai.research\",\n    p_detail: { actor: \"n8n:wf05\", angle: $json.angle_id, confidence: $json.research.confidence },\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "5cc802d377af17e7c77d284b",
+      "name": "Advance To RESEARCHED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2900,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/retry.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Error classification, backoff and rate-limit handling.\n// Used by every node that talks to an external service. The contract is simple:\n// classify -> decide retry -> compute delay -> record. One failed lead never\n// stops a campaign, and a rate limit pauses only the provider that raised it.\n// ---------------------------------------------------------------------------\n\nconst ERROR_TYPES = ['rate_limit', 'timeout', 'auth', 'validation', 'provider_error', 'ai_schema', 'network', 'unknown'];\n\nconst RETRYABLE = new Set(['rate_limit', 'timeout', 'provider_error', 'network', 'ai_schema']);\n\n/** Map an HTTP status / thrown error onto one of ERROR_TYPES. */\nfunction classifyError(error = {}) {\n  const status = error.status ?? error.httpCode ?? error.statusCode ?? error.response?.status ?? null;\n  const message = String(error.message ?? error.error ?? error ?? '');\n\n  if (status === 429) return 'rate_limit';\n  if (status === 408 || /timeout|etimedout|esockettimedout|aborted/i.test(message)) return 'timeout';\n  if (status === 401 || status === 403) return 'auth';\n  if (status === 400 || status === 422) return 'validation';\n  if (status && status >= 500) return 'provider_error';\n  if (/econnreset|enotfound|econnrefused|socket hang up|network/i.test(message)) return 'network';\n  if (/schema|json|unexpected token|failed to parse/i.test(message)) return 'ai_schema';\n  if (/rate limit|too many requests|quota/i.test(message)) return 'rate_limit';\n  return 'unknown';\n}\n\nfunction isRetryable(errorType) {\n  return RETRYABLE.has(errorType);\n}\n\n/**\n * Exponential backoff with full jitter, honouring Retry-After when present.\n * 2s, 4s, 8s, 16s ... capped.\n */\nfunction backoffMs(attempt, { baseMs = 2000, capMs = 300000, retryAfterSeconds = null, jitter = true } = {}) {\n  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {\n    return Math.min(capMs, Number(retryAfterSeconds) * 1000);\n  }\n  const exponential = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));\n  if (!jitter) return exponential;\n  return Math.floor(exponential / 2 + Math.random() * (exponential / 2));\n}\n\nfunction retryAfterFrom(headers = {}) {\n  const raw = headers['retry-after'] ?? headers['Retry-After'] ?? headers['x-ratelimit-reset-after'];\n  if (raw == null) return null;\n  const seconds = Number(raw);\n  if (Number.isFinite(seconds)) return seconds;\n  const when = Date.parse(raw);\n  return Number.isFinite(when) ? Math.max(0, Math.round((when - Date.now()) / 1000)) : null;\n}\n\n/**\n * Decision object for a failed item.\n * `dead_letter` means: stop retrying, keep the row in `errors`, carry on with\n * the rest of the batch.\n */\nfunction decideRetry({ error, attempt = 1, maxRetries = 3, headers = {} } = {}) {\n  const errorType = classifyError(error);\n  const retryable = isRetryable(errorType);\n  const exhausted = attempt >= maxRetries;\n  return {\n    error_type: errorType,\n    retryable,\n    retry: retryable && !exhausted,\n    dead_letter: !retryable || exhausted,\n    delay_ms: retryable ? backoffMs(attempt, { retryAfterSeconds: retryAfterFrom(headers) }) : 0,\n    attempt,\n    max_retries: maxRetries,\n    reason: !retryable\n      ? `${errorType} is not retryable`\n      : exhausted\n        ? `retry budget exhausted after ${attempt} attempts`\n        : `retrying after backoff`\n  };\n}\n\n/** Wrap an async call with retries. Used by scripts; n8n uses its own node retry plus this classifier. */\nasync function withRetry(fn, { maxRetries = 3, onRetry = null, sleep = defaultSleep } = {}) {\n  let lastError;\n  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {\n    try {\n      return await fn(attempt);\n    } catch (error) {\n      lastError = error;\n      const decision = decideRetry({ error, attempt, maxRetries, headers: error?.headers ?? {} });\n      if (onRetry) onRetry(decision, error);\n      if (!decision.retry) break;\n      await sleep(decision.delay_ms);\n    }\n  }\n  throw lastError;\n}\n\nfunction defaultSleep(ms) {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\n/** Simple token-bucket guard so a workflow paces itself against a provider. */\nfunction rateLimiter({ perMinute = 60 } = {}) {\n  const intervalMs = 60000 / perMinute;\n  let nextAt = 0;\n  return {\n    async take(sleep = defaultSleep) {\n      const now = Date.now();\n      const wait = Math.max(0, nextAt - now);\n      nextAt = Math.max(now, nextAt) + intervalMs;\n      if (wait > 0) await sleep(wait);\n      return wait;\n    }\n  };\n}\n\n// ---- node logic ----\nconst out = [];\nfor (const item of $input.all()) {\n  const json = item.json || {};\n  const error = json.error || json.$error || json;\n  const status = error.status || error.httpCode || json.statusCode || null;\n  const decision = decideRetry({\n    error: { status, message: error.message || error.description || JSON.stringify(error).slice(0, 500) },\n    attempt: (json.retry_count || 0) + 1,\n    maxRetries: 3,\n    headers: json.headers || {}\n  });\n  out.push({ json: {\n    lead_id: json.lead_id ?? null,\n    campaign_id: json.campaign_id ?? null,\n    workflow: \"wf05-research\",\n    provider: json.provider ?? null,\n    http_status: status,\n    error_type: decision.error_type,\n    error_message: error.message || String(error).slice(0, 500),\n    retryable: decision.retryable,\n    dead_letter: decision.dead_letter,\n    delay_ms: decision.delay_ms,\n    payload: { node: json.node ?? null, stage: json.stage ?? null }\n  } });\n}\nreturn out;\n"
+      },
+      "id": "3ba22efc27f523ac68057413",
+      "name": "Classify Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        870
+      ],
+      "notes": "Uses the same classifier as the test suite: 429 backs off, 5xx retries, 401/422 dead-letters immediately."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/fail_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id || null,\n    p_workflow: \"wf05-research\",\n    p_error_type: $json.error_type || 'unknown',\n    p_message: String($json.error_message || $json.error || 'unknown error').slice(0, 2000),\n    p_node: \"Claude: Research\",\n    p_provider: $json.provider || null,\n    p_http_status: $json.http_status || null,\n    p_payload: $json.payload || {},\n    p_max_retries: 3,\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "7cc365e832abaeabbf589cef",
+      "name": "Record Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        870
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The failed-item queue. The lead returns to its stage with an incremented retry count and an exponential backoff; the rest of the batch is unaffected."
+    }
+  ],
+  "connections": {
+    "Every 20 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called By Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Campaign + Niche": {
+      "main": [
+        [
+          {
+            "node": "Claim QUALIFIED Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim QUALIFIED Leads": {
+      "main": [
+        [
+          {
+            "node": "In A Researched Band?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "In A Researched Band?": {
+      "main": [
+        [
+          {
+            "node": "Fetch Lead Detail",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hold For Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Lead Detail": {
+      "main": [
+        [
+          {
+            "node": "Render Research Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Research Prompt": {
+      "main": [
+        [
+          {
+            "node": "Claude: Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Research": {
+      "main": [
+        [
+          {
+            "node": "Parse Research",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Research": {
+      "main": [
+        [
+          {
+            "node": "Valid Research?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Research?": {
+      "main": [
+        [
+          {
+            "node": "Store Research Brief",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Claude: Repair Research JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Repair Research JSON": {
+      "main": [
+        [
+          {
+            "node": "Parse Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Research Brief": {
+      "main": [
+        [
+          {
+            "node": "Update Lead Angle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Lead Angle": {
+      "main": [
+        [
+          {
+            "node": "Advance To RESEARCHED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Failure": {
+      "main": [
+        [
+          {
+            "node": "Record Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "ai"
+    },
+    {
+      "name": "research"
+    }
+  ],
+  "meta": {
+    "description": "Write a grounded research brief for each qualified lead.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "5f3b10a98003892da354d5c4"
+}

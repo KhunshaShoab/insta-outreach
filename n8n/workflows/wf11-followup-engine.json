@@ -1,0 +1,921 @@
+{
+  "name": "wf11-followup-engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9,14 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "7b2b223c43e96c57235450b3",
+      "name": "Twice Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/v_followups_due?select=*&limit=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "b9d301f35c0b8a218b50f7b2",
+      "name": "Read Follow-ups Due",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The view already excludes leads with replied_at set or a terminal status. This is the first of two guards."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/followups.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Follow-up scheduling.\n// One rule dominates: a reply at any stage stops the sequence. That is enforced\n// in three places - here, in the follow-up workflow's guard, and in a database\n// trigger - because getting it wrong means messaging someone who already\n// answered.\n// ---------------------------------------------------------------------------\n\nconst STOP_STATUSES = ['REPLIED', 'INTERESTED', 'NOT_INTERESTED', 'NURTURE', 'CLOSED', 'OPTED_OUT'];\nconst FOLLOWUP_KINDS = ['followup_1', 'followup_2', 'followup_3_final'];\n\n/** Should the sequence keep running for this lead? */\nfunction shouldStopSequence(lead = {}) {\n  if (lead.replied_at) return { stop: true, reason: 'reply_received' };\n  if (STOP_STATUSES.includes(lead.status)) return { stop: true, reason: `status_${String(lead.status).toLowerCase()}` };\n  if (['REPLIED', 'CONVERSATION', 'INTERESTED', 'NURTURE', 'NOT_INTERESTED', 'CLOSED'].includes(lead.stage)) {\n    return { stop: true, reason: `stage_${String(lead.stage).toLowerCase()}` };\n  }\n  if (lead.suppressed) return { stop: true, reason: 'suppressed' };\n  return { stop: false, reason: null };\n}\n\n/** Day offsets for a campaign, falling back to the global default. */\nfunction offsetsFor(campaign, defaults) {\n  const fromCampaign = campaign?.followups?.day_offsets;\n  if (Array.isArray(fromCampaign) && fromCampaign.length) return fromCampaign;\n  return (defaults?.steps ?? []).filter((s) => s.step > 0).map((s) => s.day_offset);\n}\n\n/**\n * Build the schedule for a lead whose initial DM was just sent.\n * @returns [{ step, kind, due_at }]\n */\nfunction buildSchedule(sentAt, campaign, defaults) {\n  if (campaign?.followups?.enabled === false) return [];\n  const offsets = offsetsFor(campaign, defaults);\n  const window = campaign?.followups?.send_window ?? defaults?.send_window;\n  const base = sentAt instanceof Date ? sentAt : new Date(sentAt);\n  return offsets.slice(0, FOLLOWUP_KINDS.length).map((days, i) => {\n    const due = new Date(base.getTime() + days * 86400000);\n    return {\n      step: i + 1,\n      kind: FOLLOWUP_KINDS[i],\n      day_offset: days,\n      due_at: nextSendSlot(due, window).toISOString()\n    };\n  });\n}\n\n/**\n * Move a timestamp to the next allowed sending slot.\n * Interpreted in the campaign's timezone by the caller - here we work on the\n * date object's local-equivalent parts supplied in `window`.\n */\nfunction nextSendSlot(date, window) {\n  if (!window) return date;\n  const out = new Date(date.getTime());\n  const days = window.days ?? [1, 2, 3, 4, 5];\n  const start = window.start_hour ?? 9;\n  const end = window.end_hour ?? 18;\n\n  for (let guard = 0; guard < 14; guard += 1) {\n    const dow = out.getUTCDay();\n    const hour = out.getUTCHours();\n    if (!days.includes(dow)) {\n      out.setUTCDate(out.getUTCDate() + 1);\n      out.setUTCHours(start, 0, 0, 0);\n      continue;\n    }\n    if (hour < start) { out.setUTCHours(start, 0, 0, 0); return out; }\n    if (hour >= end) {\n      out.setUTCDate(out.getUTCDate() + 1);\n      out.setUTCHours(start, 0, 0, 0);\n      continue;\n    }\n    return out;\n  }\n  return out;\n}\n\n/** The step config (intent, char limit) for a given follow-up kind. */\nfunction stepConfig(kind, defaults) {\n  return (defaults?.steps ?? []).find((s) => s.kind === kind) ?? null;\n}\n\n/**\n * Daily release gate. The queue never hands out more than the campaign allows,\n * so a backlog cannot turn into a burst.\n */\nfunction applyDailyLimits(items, { sentToday = 0, limit = 30 } = {}) {\n  const remaining = Math.max(0, limit - sentToday);\n  return { release: items.slice(0, remaining), held: items.slice(remaining), remaining };\n}\n\n/** What happens once the final follow-up went out without a reply. */\nfunction afterFinal(defaults) {\n  return defaults?.after_final ?? { status: 'NO_RESPONSE', move_to_stage: 'NURTURE', nurture_recheck_days: 90 };\n}\n\n// ---- node logic ----\n// Second guard, in code, against a stale read: re-check the lead's own state\n// before anything is generated. Cheap, and the cost of being wrong is messaging\n// someone who already answered.\nconst out = [];\nfor (const item of $input.all()) {\n  const rows = Array.isArray(item.json) ? item.json : [item.json];\n  for (const row of rows) {\n    if (!row || !row.followup_id) continue;\n    const verdict = shouldStopSequence({\n      replied_at: row.replied_at ?? null,\n      status: row.status,\n      stage: row.stage,\n      suppressed: row.suppressed ?? false\n    });\n    out.push({ json: { ...row, stop: verdict.stop, stop_reason: verdict.reason } });\n  }\n}\nreturn out;\n"
+      },
+      "id": "ef94bbb58627eb6ea66dffa2",
+      "name": "Reply Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r0",
+                    "leftValue": "={{ $json.stop ? \"stop\" : \"send\" }}",
+                    "rightValue": "send",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "send"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "r1",
+                    "leftValue": "={{ $json.stop ? \"stop\" : \"send\" }}",
+                    "rightValue": "stop",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "stop"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "other"
+        }
+      },
+      "id": "30df45ce7763c8b5d922ce5c",
+      "name": "Still Waiting?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/cancel_followups",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_lead_id: $json.lead_id, p_reason: $json.stop_reason || \"reply_received\" }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "1a77a25ce04d5f44101a947e",
+      "name": "Cancel Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        680
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/followups?id=eq.{{ $json.followup_id }}&status=eq.SCHEDULED",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"GENERATING\", generated_at: new Date().toISOString() }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "c9292ce532671e7816516481",
+      "name": "Claim Follow-up Step",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1220,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The status filter makes this a claim: a parallel run PATCHing the same row gets zero rows back and skips it."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/outreach?lead_id=eq.{{ $('Reply Guard').item.json.lead_id }}&select=kind,variation,message,final_message,sent_at,outreach_angle,personalisation&order=created_at.asc",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "25e325048862bab46262757a",
+      "name": "Load Thread + Research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/research?lead_id=eq.{{ $('Reply Guard').item.json.lead_id }}&select=*&order=created_at.desc&limit=1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "8e7884a69fc3c8c36b04e039",
+      "name": "Load Research Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/prompts.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Prompt loading and rendering.\n// Prompts live in prompts/*.md as plain text with front matter, so they can be\n// reviewed and diffed like code. n8n/build.mjs inlines them into the workflow\n// JSON at build time; Node tooling reads them from disk.\n//\n// Placeholders:\n//   {{name}}        required string - rendering throws if it is missing\n//   {{name?}}       optional - renders as \"(not available)\" when missing\n//   {{json:name}}   pretty-printed JSON block\n//   {{list:name}}   array rendered as \"- item\" lines\n// ---------------------------------------------------------------------------\n\nconst PLACEHOLDER = /\\{\\{\\s*(json:|list:)?([a-zA-Z0-9_.]+)(\\?)?\\s*\\}\\}/g;\n\n/** Split `---` front matter from the prompt body. */\nfunction parseFrontMatter(text) {\n  const raw = String(text);\n  if (!raw.startsWith('---')) return { meta: {}, body: raw.trim() };\n  const end = raw.indexOf('\\n---', 3);\n  if (end === -1) return { meta: {}, body: raw.trim() };\n\n  const meta = {};\n  for (const line of raw.slice(3, end).split('\\n')) {\n    const match = line.match(/^\\s*([a-z_]+)\\s*:\\s*(.+?)\\s*$/i);\n    if (!match) continue;\n    const [, key, value] = match;\n    meta[key] = /^\\d+(\\.\\d+)?$/.test(value) ? Number(value)\n      : value === 'true' ? true\n      : value === 'false' ? false\n      : value.replace(/^[\"']|[\"']$/g, '');\n  }\n  return { meta, body: raw.slice(end + 4).trim() };\n}\n\nfunction lookup(vars, path) {\n  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), vars);\n}\n\n/** Fill a prompt template. Throws on a missing required variable. */\nfunction renderTemplate(template, vars = {}) {\n  const missing = [];\n  const out = String(template).replace(PLACEHOLDER, (_match, kind, name, optional) => {\n    const value = lookup(vars, name);\n    const absent = value === undefined || value === null || value === '';\n\n    if (absent) {\n      if (!optional) { missing.push(name); return ''; }\n      return kind === 'json:' ? '{}' : kind === 'list:' ? '- (none)' : '(not available)';\n    }\n    if (kind === 'json:') return JSON.stringify(value, null, 2);\n    if (kind === 'list:') {\n      const items = Array.isArray(value) ? value : [value];\n      return items.length ? items.map((v) => `- ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\\n') : '- (none)';\n    }\n    return Array.isArray(value) ? value.join(', ') : String(value);\n  });\n\n  if (missing.length) {\n    throw new Error(`renderTemplate: missing required variables: ${[...new Set(missing)].join(', ')}`);\n  }\n  return out;\n}\n\n/** Variables a template expects, for validation and documentation. */\nfunction templateVariables(template) {\n  const required = new Set();\n  const optional = new Set();\n  for (const match of String(template).matchAll(PLACEHOLDER)) {\n    (match[3] ? optional : required).add(match[2]);\n  }\n  return { required: [...required], optional: [...optional] };\n}\n\n/**\n * Render a prompt from a registry entry.\n * @param {object} prompt { meta, body } as produced by parseFrontMatter\n */\nfunction renderPrompt(prompt, vars = {}) {\n  const body = renderTemplate(prompt.body ?? prompt, vars);\n  return {\n    prompt: body,\n    model: prompt.meta?.model ?? 'default',\n    max_tokens: prompt.meta?.max_tokens ?? 2000,\n    temperature: prompt.meta?.temperature ?? 0.2,\n    schema_name: prompt.meta?.schema ?? null,\n    version: prompt.meta?.version ?? '1'\n  };\n}\n\n// ---- lib/followups.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Follow-up scheduling.\n// One rule dominates: a reply at any stage stops the sequence. That is enforced\n// in three places - here, in the follow-up workflow's guard, and in a database\n// trigger - because getting it wrong means messaging someone who already\n// answered.\n// ---------------------------------------------------------------------------\n\nconst STOP_STATUSES = ['REPLIED', 'INTERESTED', 'NOT_INTERESTED', 'NURTURE', 'CLOSED', 'OPTED_OUT'];\nconst FOLLOWUP_KINDS = ['followup_1', 'followup_2', 'followup_3_final'];\n\n/** Should the sequence keep running for this lead? */\nfunction shouldStopSequence(lead = {}) {\n  if (lead.replied_at) return { stop: true, reason: 'reply_received' };\n  if (STOP_STATUSES.includes(lead.status)) return { stop: true, reason: `status_${String(lead.status).toLowerCase()}` };\n  if (['REPLIED', 'CONVERSATION', 'INTERESTED', 'NURTURE', 'NOT_INTERESTED', 'CLOSED'].includes(lead.stage)) {\n    return { stop: true, reason: `stage_${String(lead.stage).toLowerCase()}` };\n  }\n  if (lead.suppressed) return { stop: true, reason: 'suppressed' };\n  return { stop: false, reason: null };\n}\n\n/** Day offsets for a campaign, falling back to the global default. */\nfunction offsetsFor(campaign, defaults) {\n  const fromCampaign = campaign?.followups?.day_offsets;\n  if (Array.isArray(fromCampaign) && fromCampaign.length) return fromCampaign;\n  return (defaults?.steps ?? []).filter((s) => s.step > 0).map((s) => s.day_offset);\n}\n\n/**\n * Build the schedule for a lead whose initial DM was just sent.\n * @returns [{ step, kind, due_at }]\n */\nfunction buildSchedule(sentAt, campaign, defaults) {\n  if (campaign?.followups?.enabled === false) return [];\n  const offsets = offsetsFor(campaign, defaults);\n  const window = campaign?.followups?.send_window ?? defaults?.send_window;\n  const base = sentAt instanceof Date ? sentAt : new Date(sentAt);\n  return offsets.slice(0, FOLLOWUP_KINDS.length).map((days, i) => {\n    const due = new Date(base.getTime() + days * 86400000);\n    return {\n      step: i + 1,\n      kind: FOLLOWUP_KINDS[i],\n      day_offset: days,\n      due_at: nextSendSlot(due, window).toISOString()\n    };\n  });\n}\n\n/**\n * Move a timestamp to the next allowed sending slot.\n * Interpreted in the campaign's timezone by the caller - here we work on the\n * date object's local-equivalent parts supplied in `window`.\n */\nfunction nextSendSlot(date, window) {\n  if (!window) return date;\n  const out = new Date(date.getTime());\n  const days = window.days ?? [1, 2, 3, 4, 5];\n  const start = window.start_hour ?? 9;\n  const end = window.end_hour ?? 18;\n\n  for (let guard = 0; guard < 14; guard += 1) {\n    const dow = out.getUTCDay();\n    const hour = out.getUTCHours();\n    if (!days.includes(dow)) {\n      out.setUTCDate(out.getUTCDate() + 1);\n      out.setUTCHours(start, 0, 0, 0);\n      continue;\n    }\n    if (hour < start) { out.setUTCHours(start, 0, 0, 0); return out; }\n    if (hour >= end) {\n      out.setUTCDate(out.getUTCDate() + 1);\n      out.setUTCHours(start, 0, 0, 0);\n      continue;\n    }\n    return out;\n  }\n  return out;\n}\n\n/** The step config (intent, char limit) for a given follow-up kind. */\nfunction stepConfig(kind, defaults) {\n  return (defaults?.steps ?? []).find((s) => s.kind === kind) ?? null;\n}\n\n/**\n * Daily release gate. The queue never hands out more than the campaign allows,\n * so a backlog cannot turn into a burst.\n */\nfunction applyDailyLimits(items, { sentToday = 0, limit = 30 } = {}) {\n  const remaining = Math.max(0, limit - sentToday);\n  return { release: items.slice(0, remaining), held: items.slice(remaining), remaining };\n}\n\n/** What happens once the final follow-up went out without a reply. */\nfunction afterFinal(defaults) {\n  return defaults?.after_final ?? { status: 'NO_RESPONSE', move_to_stage: 'NURTURE', nurture_recheck_days: 90 };\n}\n\n// ---- node logic ----\nconst PROMPT = {\n  \"meta\": {\n    \"id\": \"followup_message\",\n    \"version\": \"1.0.0\",\n    \"model\": \"heavy\",\n    \"max_tokens\": 1000,\n    \"temperature\": 0.7,\n    \"schema\": \"followup_message\"\n  },\n  \"body\": \"ROLE\\n\\nYou write follow-up Instagram DMs for OptiFlow Solutions. This prospect received an earlier message and has not replied.\\n\\nA follow-up that says \\\"just following up\\\" is worse than no follow-up: it spends goodwill and teaches the prospect to ignore the thread. Every follow-up you write must carry a reason for existing.\\n\\nINPUT\\n\\nBusiness\\n- Business: {{lead.business_name}} (@{{lead.instagram_handle}})\\n- Address them as: {{decision_maker.address_as?}}\\n- Niche: {{niche.name}}\\n\\nWhat was already sent\\n{{json:history.messages}}\\n\\nOriginal angle: {{angle.label}} ({{angle.id}})\\nOriginal observation used: {{history.personalisation_used?}}\\n\\nResearch brief\\n- Summary: {{research.business_summary}}\\n- Specific observations (unused ones are the most valuable here):\\n{{list:research.specific_observations}}\\n- Operational pain points:\\n{{list:research.operational_pain_points}}\\n- Relevant capability: {{research.recommended_service}}\\n\\nThis follow-up\\n- Step: {{step.kind}} ({{step.label}})\\n- Days since the last message: {{step.days_since_last}}\\n- Intent for this step: {{step.intent}}\\n- Maximum characters: {{step.max_chars}}\\n- Is this the final message in the sequence: {{step.final}}\\n\\nTASK\\n\\nWrite ONE message that fits the step's intent exactly.\\n\\nStep guidance:\\n- followup_1 (short continuation): one or two lines. Re-approach the same idea from a different side, using different words from the first message. Make replying take five seconds. No new pitch.\\n- followup_2 (business observation / value): give them something they did not have before - a concrete observation about how comparable businesses in their niche handle this specific problem, or a second observation about their own business you did not use the first time. Still short. Still ends in a light question.\\n- followup_3_final (close the loop): acknowledge that the timing may simply be wrong, make it easy to say \\\"not now\\\", leave the door open. Ask nothing that requires effort. This is the last automated message - never hint at another one.\\n\\nQUALIFICATION RULES\\n\\nNever write:\\n- \\\"just following up\\\", \\\"bumping this\\\", \\\"circling back\\\", \\\"in case you missed it\\\", \\\"did you see my message\\\";\\n- guilt or pressure of any kind (\\\"I noticed you haven't replied\\\");\\n- a repeat of the first message's sentence structure or its opening line;\\n- a service list, a price, a promise or a claim about results;\\n- an emoji (follow-ups earn less leeway than the first message);\\n- a meeting request.\\n\\nAlways:\\n- reference the earlier thread naturally, without naming it as a follow-up;\\n- stay under the character limit;\\n- end with one low-effort question, or in the final message, an explicit permission to decline;\\n- avoid gendered pronouns.\\n\\nOUTPUT FORMAT\\n\\nReturn ONLY a JSON object.\\n\\nJSON SCHEMA\\n\\n{\\n  \\\"message\\\": \\\"the follow-up text\\\",\\n  \\\"char_count\\\": 0,\\n  \\\"reason_for_this_followup\\\": \\\"what this message adds that the last one did not\\\",\\n  \\\"references\\\": [\\\"what from the previous messages or the brief you drew on\\\"],\\n  \\\"self_check\\\": {\\n    \\\"not_just_following_up\\\": true|false,\\n    \\\"adds_new_information\\\": true|false,\\n    \\\"different_opening_from_previous\\\": true|false,\\n    \\\"under_max_chars\\\": true|false,\\n    \\\"no_pressure_language\\\": true|false\\n  }\\n}\\n\\nEDGE CASES\\n\\n- The research brief has no unused observations left: use a niche-level observation about how similar businesses handle the problem, and say so honestly (\\\"most clinics your size end up...\\\") without inventing statistics.\\n- The previous messages already covered the angle thoroughly: shift to an adjacent angle from the same niche rather than repeating.\\n- This is the final message and the prospect has ignored three touches: keep it to two lines, warm, and closed. No question mark is acceptable here if a statement reads better.\\n- The earlier message was edited by a human before sending: treat the EDITED text as what they actually received - it is what appears in history.messages.\\n- If history.messages is empty or malformed, return a message suitable for followup_1 and set references to an empty array.\"\n};\nconst FOLLOWUP_DEFAULTS = {\"version\":1,\"note\":\"Follow-up cadence. Every interval is configurable per campaign (campaign.followups overrides this file). A reply at ANY step cancels every pending follow-up for that lead - enforced in lib/followups.js and by a DB trigger in db/migrations/0003_functions.sql.\",\"timezone\":\"America/Los_Angeles\",\"send_window\":{\"start_hour\":9,\"end_hour\":18,\"days\":[1,2,3,4,5]},\"stop_on_reply\":true,\"stop_on_statuses\":[\"REPLIED\",\"INTERESTED\",\"NOT_INTERESTED\",\"NURTURE\",\"CLOSED\",\"OPTED_OUT\"],\"max_followups\":3,\"steps\":[{\"step\":0,\"day_offset\":0,\"kind\":\"initial\",\"label\":\"Initial DM\",\"prompt\":\"05-outreach-message\",\"intent\":\"Open a conversation with one specific observation and one relevant question.\"},{\"step\":1,\"day_offset\":2,\"kind\":\"followup_1\",\"label\":\"Follow-up #1 - short continuation\",\"prompt\":\"06-followup-message\",\"intent\":\"One or two lines that continue the original thought. Never 'just following up'. Re-state the specific observation in different words and make replying take five seconds.\",\"max_chars\":300},{\"step\":2,\"day_offset\":5,\"kind\":\"followup_2\",\"label\":\"Follow-up #2 - business observation / value\",\"prompt\":\"06-followup-message\",\"intent\":\"Add something they did not have before: a concrete observation about how similar brands in their niche handle this, or a number from comparable work. No pitch deck, no service list.\",\"max_chars\":450},{\"step\":3,\"day_offset\":9,\"kind\":\"followup_3_final\",\"label\":\"Final follow-up - close the loop\",\"prompt\":\"06-followup-message\",\"intent\":\"Respectful close-the-loop. Acknowledge the timing may be wrong, leave the door open, ask nothing more than a yes/no. This is the last automated touch.\",\"max_chars\":300,\"final\":true}],\"after_final\":{\"status\":\"NO_RESPONSE\",\"move_to_stage\":\"NURTURE\",\"nurture_recheck_days\":90},\"rate_limits\":{\"note\":\"Human-operated sending pace. The queue will not release more than this many messages per day per sending account.\",\"max_new_dms_per_day\":30,\"max_followups_per_day\":40,\"min_seconds_between_sends\":45}};\n\nconst row = $('Reply Guard').first().json;\nconst history = $('Load Thread + Research').all().map((i) => i.json).flat().filter(Boolean);\nconst briefRaw = $input.first().json;\nconst research = (Array.isArray(briefRaw) ? briefRaw[0] : briefRaw) || {};\nconst step = stepConfig(row.kind, FOLLOWUP_DEFAULTS) || { kind: row.kind, label: row.kind, intent: 'Continue the conversation with something new.', max_chars: 400 };\n\nconst lastSent = history.filter((m) => m.sent_at).sort((a, b) => new Date(b.sent_at) - new Date(a.sent_at))[0];\nconst daysSinceLast = lastSent ? Math.max(0, Math.round((Date.now() - new Date(lastSent.sent_at)) / 86400000)) : null;\n\nconst rendered = renderPrompt(PROMPT, {\n  lead: { business_name: row.business_name, instagram_handle: row.instagram_handle },\n  decision_maker: { address_as: row.target_contact ? String(row.target_contact).split(' ')[0] : null },\n  niche: { name: research.business_model ?? 'their niche' },\n  history: {\n    messages: history.map((m) => ({ kind: m.kind, sent_at: m.sent_at, message: m.final_message || m.message })),\n    personalisation_used: (history[0]?.personalisation ?? []).join('; ') || null\n  },\n  angle: { label: history[0]?.outreach_angle ?? research.recommended_angle ?? 'general', id: history[0]?.outreach_angle ?? 'general' },\n  research: {\n    business_summary: research.business_summary ?? 'No research brief available.',\n    specific_observations: research.specific_observations ?? [],\n    operational_pain_points: research.operational_pain_points ?? [],\n    recommended_service: research.recommended_service ?? 'customer support'\n  },\n  step: {\n    kind: step.kind,\n    label: step.label,\n    intent: step.intent,\n    max_chars: step.max_chars ?? 400,\n    final: Boolean(step.final),\n    days_since_last: daysSinceLast ?? 'unknown'\n  }\n});\n\nreturn [{ json: {\n  followup_id: row.followup_id,\n  lead_id: row.lead_id,\n  campaign_id: row.campaign_id,\n  step: row.step,\n  kind: row.kind,\n  max_chars: step.max_chars ?? 400,\n  is_final: Boolean(step.final),\n  prompt: rendered.prompt,\n  model: $env.ANTHROPIC_MODEL_HEAVY || 'claude-opus-5',\n  max_tokens: rendered.max_tokens,\n  temperature: rendered.temperature,\n  prompt_version: rendered.version\n} }];\n"
+      },
+      "id": "63232b2f60bd2a780269c261",
+      "name": "Render Follow-up Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1940,
+        300
+      ],
+      "notes": "Each step has its own intent and length limit, from config/followups.default.json. The prompt receives the real thread, including any human edit, because that is what the prospect actually read."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $json.model, max_tokens: $json.max_tokens, temperature: $json.temperature, messages: [{ role: 'user', content: $json.prompt }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "9272cd647ca326b008be005e",
+      "name": "Claude: Write Follow-up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "anthropic-api-key",
+          "name": "Anthropic API Key"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/validate.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Minimal JSON Schema validator (draft-07 subset).\n// Deliberately dependency-free: it runs unchanged inside an n8n Code node,\n// where npm packages are not available by default. Supports the keywords the\n// AI output schemas in schemas/ actually use.\n// ---------------------------------------------------------------------------\n\nconst TYPE_CHECKS = {\n  object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v),\n  array: Array.isArray,\n  string: (v) => typeof v === 'string',\n  number: (v) => typeof v === 'number' && Number.isFinite(v),\n  integer: (v) => Number.isInteger(v),\n  boolean: (v) => typeof v === 'boolean',\n  null: (v) => v === null\n};\n\nfunction typeMatches(value, type) {\n  if (Array.isArray(type)) return type.some((t) => typeMatches(value, t));\n  const check = TYPE_CHECKS[type];\n  return check ? check(value) : true;\n}\n\n/**\n * @returns {{ valid: boolean, errors: string[] }}\n */\nfunction validate(value, schema, path = '$') {\n  const errors = [];\n  if (!schema || typeof schema !== 'object') return { valid: true, errors };\n\n  if (schema.type && !typeMatches(value, schema.type)) {\n    errors.push(`${path}: expected ${Array.isArray(schema.type) ? schema.type.join('|') : schema.type}, got ${describe(value)}`);\n    return { valid: false, errors };\n  }\n\n  if (schema.enum && !schema.enum.includes(value)) {\n    errors.push(`${path}: ${JSON.stringify(value)} is not one of ${JSON.stringify(schema.enum)}`);\n  }\n  if (schema.const !== undefined && value !== schema.const) {\n    errors.push(`${path}: must equal ${JSON.stringify(schema.const)}`);\n  }\n\n  if (typeof value === 'string') {\n    if (schema.minLength != null && value.length < schema.minLength) errors.push(`${path}: shorter than ${schema.minLength}`);\n    if (schema.maxLength != null && value.length > schema.maxLength) errors.push(`${path}: longer than ${schema.maxLength} (${value.length})`);\n    if (schema.pattern && !new RegExp(schema.pattern).test(value)) errors.push(`${path}: does not match /${schema.pattern}/`);\n  }\n\n  if (typeof value === 'number') {\n    if (schema.minimum != null && value < schema.minimum) errors.push(`${path}: below minimum ${schema.minimum}`);\n    if (schema.maximum != null && value > schema.maximum) errors.push(`${path}: above maximum ${schema.maximum}`);\n  }\n\n  if (Array.isArray(value)) {\n    if (schema.minItems != null && value.length < schema.minItems) errors.push(`${path}: needs at least ${schema.minItems} items`);\n    if (schema.maxItems != null && value.length > schema.maxItems) errors.push(`${path}: at most ${schema.maxItems} items`);\n    if (schema.items) {\n      value.forEach((item, i) => {\n        errors.push(...validate(item, schema.items, `${path}[${i}]`).errors);\n      });\n    }\n    if (schema.uniqueItems) {\n      const seen = new Set(value.map((v) => JSON.stringify(v)));\n      if (seen.size !== value.length) errors.push(`${path}: items must be unique`);\n    }\n  }\n\n  if (TYPE_CHECKS.object(value)) {\n    for (const key of schema.required ?? []) {\n      if (!(key in value) || value[key] === undefined) errors.push(`${path}.${key}: required property missing`);\n    }\n    for (const [key, sub] of Object.entries(schema.properties ?? {})) {\n      if (key in value && value[key] !== undefined) {\n        errors.push(...validate(value[key], sub, `${path}.${key}`).errors);\n      }\n    }\n    if (schema.additionalProperties === false) {\n      const allowed = new Set(Object.keys(schema.properties ?? {}));\n      for (const key of Object.keys(value)) {\n        if (!allowed.has(key)) errors.push(`${path}.${key}: unexpected property`);\n      }\n    }\n  }\n\n  return { valid: errors.length === 0, errors };\n}\n\nfunction assertValid(value, schema, label = 'payload') {\n  const { valid, errors } = validate(value, schema);\n  if (!valid) {\n    const error = new Error(`${label} failed schema validation: ${errors.slice(0, 8).join('; ')}`);\n    error.name = 'SchemaValidationError';\n    error.errors = errors;\n    throw error;\n  }\n  return value;\n}\n\nfunction describe(value) {\n  if (value === null) return 'null';\n  if (Array.isArray(value)) return 'array';\n  return typeof value;\n}\n\n// ---- lib/json.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Getting structured JSON back out of a language model, reliably.\n// The prompts all demand strict JSON, but a wrapper sentence or a fenced block\n// still shows up occasionally. This module recovers the object, validates it\n// against the schema, and tells the caller whether a retry is warranted -\n// nothing downstream ever sees half-parsed data.\n// ---------------------------------------------------------------------------\n\n/** Pull the first balanced JSON object/array out of a model response. */\nfunction extractJson(text) {\n  if (text == null) return null;\n  if (typeof text === 'object') return text;\n  const raw = String(text).trim();\n\n  const direct = tryParse(raw);\n  if (direct !== undefined) return direct;\n\n  const fenced = raw.match(/```(?:json)?\\s*([\\s\\S]*?)```/i);\n  if (fenced) {\n    const parsed = tryParse(fenced[1].trim());\n    if (parsed !== undefined) return parsed;\n  }\n\n  const start = raw.search(/[{[]/);\n  if (start === -1) return null;\n  const opener = raw[start];\n  const closer = opener === '{' ? '}' : ']';\n  let depth = 0;\n  let inString = false;\n  let escaped = false;\n\n  for (let i = start; i < raw.length; i += 1) {\n    const ch = raw[i];\n    if (inString) {\n      if (escaped) escaped = false;\n      else if (ch === '\\\\') escaped = true;\n      else if (ch === '\"') inString = false;\n      continue;\n    }\n    if (ch === '\"') { inString = true; continue; }\n    if (ch === opener) depth += 1;\n    else if (ch === closer) {\n      depth -= 1;\n      if (depth === 0) {\n        const parsed = tryParse(raw.slice(start, i + 1));\n        if (parsed !== undefined) return parsed;\n        break;\n      }\n    }\n  }\n  return null;\n}\n\nfunction tryParse(text) {\n  try {\n    return JSON.parse(text);\n  } catch {\n    return undefined;\n  }\n}\n\n/**\n * Parse + validate a model response.\n * @returns {{ ok, data, errors, retry_prompt }}\n * `retry_prompt` is the exact correction to send back on a schema failure.\n */\nfunction parseAiJson(text, schema, { label = 'AI response' } = {}) {\n  const data = extractJson(text);\n  if (data === null) {\n    return {\n      ok: false,\n      data: null,\n      errors: [`${label}: no JSON object found in the response`],\n      retry_prompt: 'Your previous response was not valid JSON. Return ONLY the JSON object described in the OUTPUT FORMAT section, with no prose, no markdown fence and no explanation.'\n    };\n  }\n  if (!schema) return { ok: true, data, errors: [], retry_prompt: null };\n\n  const { valid, errors } = validate(data, schema);\n  if (valid) return { ok: true, data, errors: [], retry_prompt: null };\n\n  return {\n    ok: false,\n    data,\n    errors,\n    retry_prompt:\n      `Your previous response did not satisfy the required schema. Fix exactly these problems and return ONLY the corrected JSON object:\\n` +\n      errors.slice(0, 10).map((e) => `- ${e}`).join('\\n')\n  };\n}\n\n/** Deep-clone + drop undefined so the object is safe to store as jsonb. */\nfunction jsonSafe(value) {\n  return JSON.parse(JSON.stringify(value ?? null));\n}\n\n// ---- node logic ----\nconst FOLLOWUP_SCHEMA = {\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"$id\":\"optiflow/followup_message\",\"title\":\"Follow-up message output\",\"type\":\"object\",\"required\":[\"message\",\"reason_for_this_followup\",\"self_check\"],\"additionalProperties\":false,\"properties\":{\"message\":{\"type\":\"string\",\"minLength\":15,\"maxLength\":900},\"char_count\":{\"type\":\"number\",\"minimum\":0},\"reason_for_this_followup\":{\"type\":\"string\",\"minLength\":15,\"maxLength\":500},\"references\":{\"type\":\"array\",\"maxItems\":8,\"items\":{\"type\":\"string\",\"maxLength\":300}},\"self_check\":{\"type\":\"object\",\"required\":[\"not_just_following_up\",\"adds_new_information\",\"under_max_chars\"],\"additionalProperties\":false,\"properties\":{\"not_just_following_up\":{\"type\":\"boolean\"},\"adds_new_information\":{\"type\":\"boolean\"},\"different_opening_from_previous\":{\"type\":\"boolean\"},\"under_max_chars\":{\"type\":\"boolean\"},\"no_pressure_language\":{\"type\":\"boolean\"}}}}};\n\nconst LAZY = ['just following up', 'following up on', 'circling back', 'bumping this', 'in case you missed', 'did you see my'];\nconst context = $('Render Follow-up Prompt').first().json;\nconst text = ($input.first().json.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\\n');\nconst parsed = parseAiJson(text, FOLLOWUP_SCHEMA, { label: 'follow-up' });\n\nif (!parsed.ok) {\n  return [{ json: { ...context, ok: false, errors: parsed.errors } }];\n}\n\nconst message = String(parsed.data.message).trim();\nconst lower = message.toLowerCase();\nconst issues = [\n  ...(LAZY.filter((p) => lower.includes(p)).map((p) => 'lazy_phrase:' + p)),\n  ...(message.length > context.max_chars ? ['over_max_chars'] : []),\n  ...(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}]/u.test(message) ? ['emoji_in_followup'] : [])\n];\n\nreturn [{ json: {\n  ...context,\n  ok: true,\n  message,\n  char_count: message.length,\n  reason: parsed.data.reason_for_this_followup,\n  references: parsed.data.references ?? [],\n  review_flags: issues,\n  raw_response: text\n} }];\n"
+      },
+      "id": "ea69db188ad5895fc228540e",
+      "name": "Parse + Check Follow-up",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        300
+      ],
+      "notes": "A follow-up that reduces to \"just following up\" is flagged before a human ever sees it."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/outreach",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n      lead_id: $json.lead_id,\n      campaign_id: $json.campaign_id,\n      company_id: $('Reply Guard').item.json.company_id ?? null,\n      kind: $json.kind,\n      followup_step: $json.step,\n      channel: 'instagram_dm',\n      variation: 'conversational',\n      message: $json.message,\n      char_count: $json.char_count,\n      outreach_angle: $('Reply Guard').item.json.outreach_angle ?? null,\n      personalisation: $json.references,\n      status: 'PENDING_REVIEW',\n      model: $json.model,\n      prompt_version: $json.prompt_version,\n      notes: ($json.review_flags || []).length ? 'Review flags: ' + $json.review_flags.join(', ') : $json.reason\n    }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "3b6e279e3f889ee033ee621e",
+      "name": "Queue Follow-up For Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Follow-ups go through the same human approval queue as first messages - campaign setting followups.require_human_approval."
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/followups?id=eq.{{ $('Parse + Check Follow-up').item.json.followup_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"PENDING_REVIEW\", outreach_id: ($json[0] ?? $json).id }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "285355127a5b5f7f9a571d22",
+      "name": "Link Draft To Step",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2900,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ Boolean($('Parse + Check Follow-up').item.json.is_final) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "63a3d4d98102db2553638efb",
+      "name": "Was That The Final Touch?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3140,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/set_lead_outcome",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_lead_id: $('Parse + Check Follow-up').item.json.lead_id, p_outcome: \"NURTURE\", p_actor: \"n8n:wf11\", p_note: \"Sequence completed without a reply\" }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "026004a4366aad0e009e4210",
+      "name": "Move To Nurture",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3380,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "After the final touch the lead moves to NURTURE for a later recheck - it is not deleted and not messaged again by this sequence."
+    },
+    {
+      "parameters": {},
+      "id": "9c7646ad6c04cb7031c22823",
+      "name": "Done",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3380,
+        490
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/retry.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Error classification, backoff and rate-limit handling.\n// Used by every node that talks to an external service. The contract is simple:\n// classify -> decide retry -> compute delay -> record. One failed lead never\n// stops a campaign, and a rate limit pauses only the provider that raised it.\n// ---------------------------------------------------------------------------\n\nconst ERROR_TYPES = ['rate_limit', 'timeout', 'auth', 'validation', 'provider_error', 'ai_schema', 'network', 'unknown'];\n\nconst RETRYABLE = new Set(['rate_limit', 'timeout', 'provider_error', 'network', 'ai_schema']);\n\n/** Map an HTTP status / thrown error onto one of ERROR_TYPES. */\nfunction classifyError(error = {}) {\n  const status = error.status ?? error.httpCode ?? error.statusCode ?? error.response?.status ?? null;\n  const message = String(error.message ?? error.error ?? error ?? '');\n\n  if (status === 429) return 'rate_limit';\n  if (status === 408 || /timeout|etimedout|esockettimedout|aborted/i.test(message)) return 'timeout';\n  if (status === 401 || status === 403) return 'auth';\n  if (status === 400 || status === 422) return 'validation';\n  if (status && status >= 500) return 'provider_error';\n  if (/econnreset|enotfound|econnrefused|socket hang up|network/i.test(message)) return 'network';\n  if (/schema|json|unexpected token|failed to parse/i.test(message)) return 'ai_schema';\n  if (/rate limit|too many requests|quota/i.test(message)) return 'rate_limit';\n  return 'unknown';\n}\n\nfunction isRetryable(errorType) {\n  return RETRYABLE.has(errorType);\n}\n\n/**\n * Exponential backoff with full jitter, honouring Retry-After when present.\n * 2s, 4s, 8s, 16s ... capped.\n */\nfunction backoffMs(attempt, { baseMs = 2000, capMs = 300000, retryAfterSeconds = null, jitter = true } = {}) {\n  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {\n    return Math.min(capMs, Number(retryAfterSeconds) * 1000);\n  }\n  const exponential = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));\n  if (!jitter) return exponential;\n  return Math.floor(exponential / 2 + Math.random() * (exponential / 2));\n}\n\nfunction retryAfterFrom(headers = {}) {\n  const raw = headers['retry-after'] ?? headers['Retry-After'] ?? headers['x-ratelimit-reset-after'];\n  if (raw == null) return null;\n  const seconds = Number(raw);\n  if (Number.isFinite(seconds)) return seconds;\n  const when = Date.parse(raw);\n  return Number.isFinite(when) ? Math.max(0, Math.round((when - Date.now()) / 1000)) : null;\n}\n\n/**\n * Decision object for a failed item.\n * `dead_letter` means: stop retrying, keep the row in `errors`, carry on with\n * the rest of the batch.\n */\nfunction decideRetry({ error, attempt = 1, maxRetries = 3, headers = {} } = {}) {\n  const errorType = classifyError(error);\n  const retryable = isRetryable(errorType);\n  const exhausted = attempt >= maxRetries;\n  return {\n    error_type: errorType,\n    retryable,\n    retry: retryable && !exhausted,\n    dead_letter: !retryable || exhausted,\n    delay_ms: retryable ? backoffMs(attempt, { retryAfterSeconds: retryAfterFrom(headers) }) : 0,\n    attempt,\n    max_retries: maxRetries,\n    reason: !retryable\n      ? `${errorType} is not retryable`\n      : exhausted\n        ? `retry budget exhausted after ${attempt} attempts`\n        : `retrying after backoff`\n  };\n}\n\n/** Wrap an async call with retries. Used by scripts; n8n uses its own node retry plus this classifier. */\nasync function withRetry(fn, { maxRetries = 3, onRetry = null, sleep = defaultSleep } = {}) {\n  let lastError;\n  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {\n    try {\n      return await fn(attempt);\n    } catch (error) {\n      lastError = error;\n      const decision = decideRetry({ error, attempt, maxRetries, headers: error?.headers ?? {} });\n      if (onRetry) onRetry(decision, error);\n      if (!decision.retry) break;\n      await sleep(decision.delay_ms);\n    }\n  }\n  throw lastError;\n}\n\nfunction defaultSleep(ms) {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\n/** Simple token-bucket guard so a workflow paces itself against a provider. */\nfunction rateLimiter({ perMinute = 60 } = {}) {\n  const intervalMs = 60000 / perMinute;\n  let nextAt = 0;\n  return {\n    async take(sleep = defaultSleep) {\n      const now = Date.now();\n      const wait = Math.max(0, nextAt - now);\n      nextAt = Math.max(now, nextAt) + intervalMs;\n      if (wait > 0) await sleep(wait);\n      return wait;\n    }\n  };\n}\n\n// ---- node logic ----\nconst out = [];\nfor (const item of $input.all()) {\n  const json = item.json || {};\n  const error = json.error || json.$error || json;\n  const status = error.status || error.httpCode || json.statusCode || null;\n  const decision = decideRetry({\n    error: { status, message: error.message || error.description || JSON.stringify(error).slice(0, 500) },\n    attempt: (json.retry_count || 0) + 1,\n    maxRetries: 3,\n    headers: json.headers || {}\n  });\n  out.push({ json: {\n    lead_id: json.lead_id ?? null,\n    campaign_id: json.campaign_id ?? null,\n    workflow: \"wf11-followup-engine\",\n    provider: json.provider ?? null,\n    http_status: status,\n    error_type: decision.error_type,\n    error_message: error.message || String(error).slice(0, 500),\n    retryable: decision.retryable,\n    dead_letter: decision.dead_letter,\n    delay_ms: decision.delay_ms,\n    payload: { node: json.node ?? null, stage: json.stage ?? null }\n  } });\n}\nreturn out;\n"
+      },
+      "id": "ce18788105780aa2e7bf0cc1",
+      "name": "Classify Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        870
+      ],
+      "notes": "Uses the same classifier as the test suite: 429 backs off, 5xx retries, 401/422 dead-letters immediately."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/fail_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_lead_id: $json.lead_id || null,\n    p_workflow: \"wf11-followup-engine\",\n    p_error_type: $json.error_type || 'unknown',\n    p_message: String($json.error_message || $json.error || 'unknown error').slice(0, 2000),\n    p_node: \"Claude: Write Follow-up\",\n    p_provider: $json.provider || null,\n    p_http_status: $json.http_status || null,\n    p_payload: $json.payload || {},\n    p_max_retries: 3,\n    p_execution_id: $execution.id\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "7144faf9d4f4586e53fba68b",
+      "name": "Record Failure",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        870
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "The failed-item queue. The lead returns to its stage with an incremented retry count and an exponential backoff; the rest of the batch is unaffected."
+    }
+  ],
+  "connections": {
+    "Twice Daily": {
+      "main": [
+        [
+          {
+            "node": "Read Follow-ups Due",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Follow-ups Due": {
+      "main": [
+        [
+          {
+            "node": "Reply Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply Guard": {
+      "main": [
+        [
+          {
+            "node": "Still Waiting?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Still Waiting?": {
+      "main": [
+        [
+          {
+            "node": "Claim Follow-up Step",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cancel Sequence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Follow-up Step": {
+      "main": [
+        [
+          {
+            "node": "Load Thread + Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Thread + Research": {
+      "main": [
+        [
+          {
+            "node": "Load Research Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Research Brief": {
+      "main": [
+        [
+          {
+            "node": "Render Follow-up Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render Follow-up Prompt": {
+      "main": [
+        [
+          {
+            "node": "Claude: Write Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Write Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Parse + Check Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + Check Follow-up": {
+      "main": [
+        [
+          {
+            "node": "Queue Follow-up For Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Follow-up For Approval": {
+      "main": [
+        [
+          {
+            "node": "Link Draft To Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Link Draft To Step": {
+      "main": [
+        [
+          {
+            "node": "Was That The Final Touch?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Was That The Final Touch?": {
+      "main": [
+        [
+          {
+            "node": "Move To Nurture",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Failure": {
+      "main": [
+        [
+          {
+            "node": "Record Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "followups"
+    }
+  ],
+  "meta": {
+    "description": "Generate due follow-ups, stop the sequence on any reply, and close the loop after the final touch.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "650f7dc7082852d6c3016bae"
+}

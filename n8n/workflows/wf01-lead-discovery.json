@@ -1,0 +1,778 @@
+{
+  "name": "wf01-lead-discovery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "5d7ba94126209585c8bb923f",
+      "name": "Daily Discovery",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "8a40c900dee67217dd7e08a4",
+      "name": "Called By Orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        260,
+        490
+      ],
+      "notes": "Input: { campaign_id, batch_size?, execution_id? }"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?id=eq.{{ $json.campaign_id || $env.DEFAULT_CAMPAIGN_ID }}&select=*,niche:niches(*)",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "08af44ce23878d6f106ef8a4",
+      "name": "Load Campaign + Niche",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "One read per run. Campaign settings - ICP band, thresholds, daily targets, follow-up offsets - all come from here, never from node parameters."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/workflow_runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    workflow: \"wf01-lead-discovery\",\n    campaign_id: $json.id || $json.campaign_id,\n    execution_id: $execution.id,\n    status: 'RUNNING'\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "81ee68a669974c727ed469bb",
+      "name": "Start Run Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        740,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Resume bookkeeping: which workflow, which campaign, which execution, and how far it got."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/normalize.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Normalisation primitives.\n// Everything that turns messy scraped text into a comparable value lives here.\n// Pure functions only - no I/O - so the same code runs in tests, in n8n Code\n// nodes (inlined by n8n/build.mjs) and in scripts.\n// ---------------------------------------------------------------------------\n\nconst US_STATES = {\n  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',\n  colorado: 'CO', connecticut: 'CT', delaware: 'DE', 'district of columbia': 'DC',\n  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL',\n  indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',\n  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',\n  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',\n  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',\n  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK',\n  oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',\n  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',\n  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI',\n  wyoming: 'WY'\n};\n\nconst STATE_CODES = new Set(Object.values(US_STATES));\n\n// Legal-entity and decorative suffixes that must not make two rows look different.\nconst NAME_NOISE = [\n  'llc', 'l l c', 'inc', 'inc.', 'incorporated', 'corp', 'corporation', 'co',\n  'company', 'ltd', 'limited', 'plc', 'pllc', 'pc', 'pa', 'dds', 'md', 'dmd',\n  'the', 'official', 'shop', 'store', 'usa', 'us'\n];\n\nfunction stripDiacritics(value) {\n  return String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');\n}\n\nfunction collapseWhitespace(value) {\n  return String(value ?? '').replace(/\\s+/g, ' ').trim();\n}\n\n/** Display-safe business name: trimmed, de-emojied, single-spaced. */\nfunction cleanBusinessName(value) {\n  if (!value) return null;\n  const cleaned = collapseWhitespace(\n    stripDiacritics(value)\n      .replace(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{FE0F}\\u{200D}]/gu, ' ')\n      .replace(/[|•·–—]+/g, ' ')\n  );\n  return cleaned || null;\n}\n\n/**\n * Comparison key for a business name. Lowercase, no punctuation, no legal\n * suffixes, no filler words. \"Glow Med Spa, LLC\" and \"glow medspa\" collapse to\n * the same key, which is what the dedupe layer matches on.\n */\nfunction normalizeBusinessName(value) {\n  const base = cleanBusinessName(value);\n  if (!base) return null;\n  const tokens = base\n    .toLowerCase()\n    .replace(/&/g, ' and ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .split(/\\s+/)\n    .filter(Boolean)\n    .filter((t) => !NAME_NOISE.includes(t));\n  // \"med spa\" -> \"medspa\", \"hair salon\" -> \"hairsalon\" is too aggressive; only\n  // collapse the two-token forms that are genuinely written both ways.\n  const joined = tokens.join(' ')\n    .replace(/\\bmed spa\\b/g, 'medspa')\n    .replace(/\\bday spa\\b/g, 'dayspa')\n    .replace(/\\be commerce\\b/g, 'ecommerce');\n  return joined || null;\n}\n\n/** Instagram handle without @, url wrapper, query string or trailing slash. */\nfunction normalizeHandle(value) {\n  if (!value) return null;\n  let handle = String(value).trim();\n  const urlMatch = handle.match(/instagram\\.com\\/([^/?#]+)/i);\n  if (urlMatch) handle = urlMatch[1];\n  handle = handle.replace(/^@+/, '').replace(/\\/+$/, '').split('?')[0].trim().toLowerCase();\n  if (!handle) return null;\n  // Instagram handles: letters, numbers, periods, underscores, max 30 chars.\n  if (!/^[a-z0-9._]{1,30}$/.test(handle)) return null;\n  const reserved = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'accounts', 'direct', 'tv']);\n  if (reserved.has(handle)) return null;\n  return handle;\n}\n\nfunction instagramUrl(handle) {\n  const h = normalizeHandle(handle);\n  return h ? `https://www.instagram.com/${h}/` : null;\n}\n\n/** Absolute, lowercase-host URL with tracking parameters removed. */\nfunction normalizeUrl(value) {\n  if (!value) return null;\n  let raw = String(value).trim();\n  if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null;\n  if (!/^https?:\\/\\//i.test(raw)) raw = `https://${raw}`;\n  let url;\n  try {\n    url = new URL(raw);\n  } catch {\n    return null;\n  }\n  if (!/^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(url.hostname)) return null;\n  for (const key of [...url.searchParams.keys()]) {\n    if (/^(utm_|fbclid|gclid|mc_|ref|source)/i.test(key)) url.searchParams.delete(key);\n  }\n  url.hostname = url.hostname.toLowerCase();\n  url.hash = '';\n  const path = url.pathname.replace(/\\/+$/, '');\n  return `${url.protocol}//${url.hostname}${path}${url.search}`;\n}\n\n// Link-in-bio aggregators are not a website - they must never become a dedupe key.\nconst AGGREGATOR_DOMAINS = new Set([\n  'linktr.ee', 'link.tree', 'beacons.ai', 'bio.link', 'linkin.bio', 'msha.ke',\n  'taplink.cc', 'lnk.bio', 'solo.to', 'campsite.bio', 'linkpop.com', 'many.link',\n  'instagram.com', 'facebook.com', 'm.facebook.com', 'business.facebook.com',\n  'tiktok.com', 'youtube.com', 'twitter.com', 'x.com', 'wa.me', 'api.whatsapp.com',\n  'g.page', 'goo.gl', 'maps.google.com', 'yelp.com', 'booksy.com', 'vagaro.com',\n  'square.site', 'squareup.com', 'calendly.com', 'sites.google.com'\n]);\n\nfunction isAggregatorDomain(domain) {\n  if (!domain) return false;\n  const d = String(domain).toLowerCase().replace(/^www\\./, '');\n  return AGGREGATOR_DOMAINS.has(d);\n}\n\n/** Registrable-ish domain: host without www, aggregators rejected. */\nfunction normalizeDomain(value) {\n  const url = normalizeUrl(value);\n  if (!url) return null;\n  let host;\n  try {\n    host = new URL(url).hostname.toLowerCase().replace(/^www\\./, '');\n  } catch {\n    return null;\n  }\n  if (isAggregatorDomain(host)) return null;\n  return host;\n}\n\n/** US phone to E.164. Anything that is not a plausible US number returns null. */\nfunction normalizePhone(value, defaultCountry = '1') {\n  if (!value) return null;\n  const raw = String(value);\n  if (/ext|x\\d{3,}/i.test(raw) === false && raw.trim().startsWith('+')) {\n    const intl = raw.replace(/[^\\d+]/g, '');\n    if (/^\\+\\d{8,15}$/.test(intl)) return intl;\n  }\n  const digits = raw.replace(/\\D/g, '');\n  if (!digits) return null;\n  let national = digits;\n  if (national.length === 11 && national.startsWith('1')) national = national.slice(1);\n  if (national.length !== 10) return null;\n  if (/^[01]/.test(national)) return null;              // invalid NANP area code\n  if (/^(\\d)\\1{9}$/.test(national)) return null;        // 5555555555 style junk\n  return `+${defaultCountry}${national}`;\n}\n\nfunction normalizeEmail(value) {\n  if (!value) return null;\n  const email = String(value).trim().toLowerCase().replace(/^mailto:/, '');\n  if (!/^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/.test(email)) return null;\n  const local = email.split('@')[0];\n  if (/^(noreply|no-reply|donotreply|postmaster|abuse|privacy)$/.test(local)) return null;\n  return email;\n}\n\n/** Accepts \"California\", \"california\", \"CA\", \"Calif.\" -> \"CA\". */\nfunction normalizeState(value) {\n  if (!value) return null;\n  const raw = String(value).trim();\n  const upper = raw.toUpperCase();\n  if (STATE_CODES.has(upper)) return upper;\n  const key = stripDiacritics(raw).toLowerCase().replace(/[^a-z\\s]/g, '').trim();\n  if (US_STATES[key]) return US_STATES[key];\n  const prefix = Object.keys(US_STATES).find((name) => name.startsWith(key) && key.length >= 4);\n  return prefix ? US_STATES[prefix] : null;\n}\n\nfunction normalizeCity(value) {\n  if (!value) return null;\n  const city = collapseWhitespace(stripDiacritics(value).replace(/[^\\p{L}\\s.'-]/gu, ' '));\n  if (!city || city.length < 2) return null;\n  return city\n    .toLowerCase()\n    .split(' ')\n    .map((w) => (w.length > 2 || /^(st|ft)$/.test(w) ? w[0].toUpperCase() + w.slice(1) : w))\n    .join(' ');\n}\n\nfunction slug(value) {\n  return stripDiacritics(String(value ?? ''))\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '')\n    .slice(0, 40);\n}\n\n/** \"12.3k\" / \"1,234\" / \"2.1M\" -> integer. */\nfunction parseCount(value) {\n  if (value === null || value === undefined || value === '') return null;\n  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;\n  const raw = String(value).trim().toLowerCase().replace(/,/g, '').replace(/\\s/g, '');\n  const match = raw.match(/^([\\d.]+)([km])?$/);\n  if (!match) return null;\n  const n = Number.parseFloat(match[1]);\n  if (!Number.isFinite(n)) return null;\n  const mult = match[2] === 'k' ? 1e3 : match[2] === 'm' ? 1e6 : 1;\n  return Math.round(n * mult);\n}\n\nfunction toIsoDate(value) {\n  if (!value) return null;\n  const d = value instanceof Date ? value : new Date(value);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString();\n}\n\nfunction daysSince(value, now = new Date()) {\n  const iso = toIsoDate(value);\n  if (!iso) return null;\n  return Math.floor((now.getTime() - new Date(iso).getTime()) / 86400000);\n}\n\n/**\n * Normalise a raw discovery row into the canonical lead shape every downstream\n * step expects. Unknown provider fields are kept under `raw`.\n */\nfunction normalizeRawLead(raw = {}) {\n  const pick = (...keys) => {\n    for (const k of keys) {\n      const v = k.split('.').reduce((o, part) => (o == null ? o : o[part]), raw);\n      if (v !== undefined && v !== null && v !== '') return v;\n    }\n    return null;\n  };\n\n  const name = cleanBusinessName(pick('business_name', 'name', 'title', 'fullName', 'ownerFullName'));\n  const handle = normalizeHandle(pick('instagram_handle', 'username', 'instagram', 'instagramUrl', 'instagram_url'));\n  const website = normalizeUrl(pick('website', 'url', 'externalUrl', 'external_url', 'site'));\n  const domain = normalizeDomain(website);\n  const state = normalizeState(pick('state', 'region', 'administrativeArea', 'address.state'));\n  const city = normalizeCity(pick('city', 'locality', 'address.city'));\n  const products = toProductList(pick('products_services', 'products', 'services', 'menu', 'categories'));\n\n  return {\n    business_name: name,\n    name_normalized: normalizeBusinessName(name),\n    instagram_handle: handle,\n    instagram_url: instagramUrl(handle) ?? normalizeUrl(pick('instagram_url', 'instagramUrl')),\n    website,\n    website_domain: domain,\n    email: normalizeEmail(pick('email', 'emails.0', 'contact_email')),\n    phone: pick('phone', 'phoneNumber', 'phone_number', 'telephone'),\n    phone_e164: normalizePhone(pick('phone', 'phoneNumber', 'phone_number', 'telephone')),\n    country: pick('country', 'countryCode') ?? 'US',\n    state,\n    city,\n    postal_code: pick('postal_code', 'postalCode', 'zip'),\n    address: pick('address', 'formattedAddress', 'street'),\n    latitude: numberOrNull(pick('latitude', 'location.lat', 'lat')),\n    longitude: numberOrNull(pick('longitude', 'location.lng', 'lng')),\n    category: pick('category', 'categoryName', 'businessCategoryName', 'business_category'),\n    bio: pick('bio', 'biography', 'description'),\n    website_description: pick('website_description', 'meta_description'),\n    products_services: products,\n    products_count: products.length || parseCount(pick('products_count', 'productsCount')),\n    ig_followers: parseCount(pick('ig_followers', 'followersCount', 'followers', 'follower_count')),\n    ig_following: parseCount(pick('ig_following', 'followsCount', 'following')),\n    ig_posts: parseCount(pick('ig_posts', 'postsCount', 'posts', 'media_count')),\n    ig_is_business: boolOrNull(pick('ig_is_business', 'isBusinessAccount', 'is_business_account')),\n    ig_is_private: boolOrNull(pick('ig_is_private', 'private', 'is_private')),\n    ig_is_verified: boolOrNull(pick('ig_is_verified', 'verified', 'is_verified')),\n    ig_last_post_at: toIsoDate(pick('ig_last_post_at', 'latestPostDate', 'last_post_at')),\n    ig_external_url: normalizeUrl(pick('externalUrl', 'external_url', 'bio_link')),\n    place_id: pick('place_id', 'placeId', 'fid'),\n    source: pick('source', '_source') ?? 'unknown',\n    source_search_term: pick('search_term', 'searchString', 'query'),\n    raw\n  };\n}\n\nfunction numberOrNull(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction boolOrNull(v) {\n  if (v === true || v === false) return v;\n  if (v === 'true') return true;\n  if (v === 'false') return false;\n  return null;\n}\n\n/** Products/services arrive as arrays, comma strings or objects. */\nfunction toProductList(value) {\n  if (!value) return [];\n  let items = [];\n  if (Array.isArray(value)) items = value;\n  else if (typeof value === 'string') items = value.split(/[,;|\\n]/);\n  else if (typeof value === 'object') items = Object.values(value);\n  const seen = new Set();\n  const out = [];\n  for (const item of items) {\n    const label = collapseWhitespace(\n      typeof item === 'string' ? item : (item?.name ?? item?.title ?? item?.label ?? '')\n    );\n    if (!label || label.length < 2 || label.length > 120) continue;\n    const key = label.toLowerCase();\n    if (seen.has(key)) continue;\n    seen.add(key);\n    out.push(label);\n  }\n  return out;\n}\n\n// ---- lib/search-terms.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Search-term expansion: campaign targeting x niche search terms.\n// \"{city}\" and \"{state}\" placeholders in config/niches.json are filled here, so\n// adding a city to a campaign immediately widens discovery with no code change.\n// ---------------------------------------------------------------------------\n\nconst STATE_NAMES = Object.fromEntries(Object.entries(US_STATES).map(([name, code]) => [code, titleCase(name)]));\n\nfunction titleCase(value) {\n  return String(value).replace(/\\b[a-z]/g, (c) => c.toUpperCase());\n}\n\n/**\n * @returns [{ query, location, city, state, niche_id }]\n */\nfunction buildSearchTerms(campaign, niche) {\n  const templates = campaign?.discovery?.search_terms_override ?? niche?.search_terms ?? [];\n  const states = campaign?.targeting?.states ?? [];\n  const cities = campaign?.targeting?.cities ?? [];\n  const out = [];\n  const seen = new Set();\n\n  const push = (query, location, city, state) => {\n    const key = `${query}|${location}`.toLowerCase();\n    if (seen.has(key) || !query.trim()) return;\n    seen.add(key);\n    out.push({ query: query.trim(), location, city, state, niche_id: niche?.id ?? null });\n  };\n\n  for (const template of templates) {\n    const needsCity = template.includes('{city}');\n    const needsState = template.includes('{state}');\n\n    if (needsCity && cities.length) {\n      for (const city of cities) {\n        const state = states[0] ?? '';\n        push(fill(template, { city, state }), `${city}, ${state || 'US'}`, city, state);\n      }\n    } else if (needsState && states.length) {\n      for (const state of states) {\n        push(fill(template, { city: '', state: STATE_NAMES[state] ?? state }), STATE_NAMES[state] ?? state, null, state);\n      }\n    } else if (cities.length) {\n      for (const city of cities) {\n        push(fill(template, { city, state: states[0] ?? '' }), `${city}, ${states[0] ?? 'US'}`, city, states[0] ?? null);\n      }\n    } else {\n      push(fill(template, { city: '', state: '' }), states.map((s) => STATE_NAMES[s] ?? s).join(', ') || 'United States', null, states[0] ?? null);\n    }\n  }\n  return out;\n}\n\nfunction fill(template, { city, state }) {\n  return template\n    .replace(/\\{city_slug\\}/g, slug(city))\n    .replace(/\\{state_slug\\}/g, slug(state))\n    .replace(/\\{city\\}/g, city ?? '')\n    .replace(/\\{state\\}/g, state ?? '')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\n/** Instagram hashtag list for a campaign (used by the instagram_search source). */\nfunction buildHashtags(campaign, niche) {\n  const cities = campaign?.targeting?.cities ?? [];\n  const out = new Set();\n  for (const tag of niche?.instagram_hashtags ?? []) {\n    if (tag.includes('{city_slug}')) {\n      for (const city of cities) out.add(fill(tag, { city, state: '' }));\n    } else {\n      out.add(tag);\n    }\n  }\n  return [...out];\n}\n\n// ---- node logic ----\n// Campaign targeting x the niche's search templates. Adding a city to the\n// campaign widens discovery with no change here.\nconst campaign = $('Load Campaign + Niche').first().json;\nconst niche = campaign.niche || {};\nconst terms = buildSearchTerms(campaign, niche);\nconst hashtags = buildHashtags(campaign, niche);\nconst dailyTarget = campaign.discovery?.daily_lead_target ?? 100;\nconst perTerm = campaign.discovery?.max_results_per_search_term ?? 50;\n\nreturn terms.map((term, index) => ({ json: {\n  campaign_id: campaign.id,\n  campaign,\n  niche,\n  term_index: index,\n  term_total: terms.length,\n  query: term.query,\n  location: term.location,\n  city: term.city,\n  state: term.state,\n  hashtags,\n  per_term_limit: Math.min(perTerm, Math.ceil(dailyTarget / Math.max(1, terms.length)) * 2),\n  sources: campaign.discovery?.sources ?? ['google_maps']\n} }));\n"
+      },
+      "id": "3f060ef77cfb7dab955c2f96",
+      "name": "Build Search Terms",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        300
+      ],
+      "notes": "Each output item is one search term. The per-term limit is derived from the campaign daily target so a wide city list does not blow the budget."
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "9a8ab39797302a6890e57678",
+      "name": "For Each Search Term",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.apify.com/v2/acts/{{ $env.APIFY_GOOGLE_MAPS_ACTOR }}/run-sync-get-dataset-items?token={{ $env.APIFY_TOKEN }}&timeout=300",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n      searchStringsArray: [$json.query],\n      locationQuery: $json.location,\n      maxCrawledPlacesPerSearch: $json.per_term_limit,\n      language: 'en',\n      skipClosedPlaces: true,\n      scrapeContacts: true\n    }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "8a334e4010c0284d8aef6863",
+      "name": "Run Scraper (Apify)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        300
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "notes": "Replaceable. Any endpoint that returns rows lib/normalize.js can read works here - see config/providers.json capability \"discovery\" and lib/providers/discovery.*.js."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/normalize.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Normalisation primitives.\n// Everything that turns messy scraped text into a comparable value lives here.\n// Pure functions only - no I/O - so the same code runs in tests, in n8n Code\n// nodes (inlined by n8n/build.mjs) and in scripts.\n// ---------------------------------------------------------------------------\n\nconst US_STATES = {\n  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',\n  colorado: 'CO', connecticut: 'CT', delaware: 'DE', 'district of columbia': 'DC',\n  florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL',\n  indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',\n  maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN',\n  mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',\n  'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',\n  'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK',\n  oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',\n  'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',\n  virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI',\n  wyoming: 'WY'\n};\n\nconst STATE_CODES = new Set(Object.values(US_STATES));\n\n// Legal-entity and decorative suffixes that must not make two rows look different.\nconst NAME_NOISE = [\n  'llc', 'l l c', 'inc', 'inc.', 'incorporated', 'corp', 'corporation', 'co',\n  'company', 'ltd', 'limited', 'plc', 'pllc', 'pc', 'pa', 'dds', 'md', 'dmd',\n  'the', 'official', 'shop', 'store', 'usa', 'us'\n];\n\nfunction stripDiacritics(value) {\n  return String(value ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '');\n}\n\nfunction collapseWhitespace(value) {\n  return String(value ?? '').replace(/\\s+/g, ' ').trim();\n}\n\n/** Display-safe business name: trimmed, de-emojied, single-spaced. */\nfunction cleanBusinessName(value) {\n  if (!value) return null;\n  const cleaned = collapseWhitespace(\n    stripDiacritics(value)\n      .replace(/[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{FE0F}\\u{200D}]/gu, ' ')\n      .replace(/[|•·–—]+/g, ' ')\n  );\n  return cleaned || null;\n}\n\n/**\n * Comparison key for a business name. Lowercase, no punctuation, no legal\n * suffixes, no filler words. \"Glow Med Spa, LLC\" and \"glow medspa\" collapse to\n * the same key, which is what the dedupe layer matches on.\n */\nfunction normalizeBusinessName(value) {\n  const base = cleanBusinessName(value);\n  if (!base) return null;\n  const tokens = base\n    .toLowerCase()\n    .replace(/&/g, ' and ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .split(/\\s+/)\n    .filter(Boolean)\n    .filter((t) => !NAME_NOISE.includes(t));\n  // \"med spa\" -> \"medspa\", \"hair salon\" -> \"hairsalon\" is too aggressive; only\n  // collapse the two-token forms that are genuinely written both ways.\n  const joined = tokens.join(' ')\n    .replace(/\\bmed spa\\b/g, 'medspa')\n    .replace(/\\bday spa\\b/g, 'dayspa')\n    .replace(/\\be commerce\\b/g, 'ecommerce');\n  return joined || null;\n}\n\n/** Instagram handle without @, url wrapper, query string or trailing slash. */\nfunction normalizeHandle(value) {\n  if (!value) return null;\n  let handle = String(value).trim();\n  const urlMatch = handle.match(/instagram\\.com\\/([^/?#]+)/i);\n  if (urlMatch) handle = urlMatch[1];\n  handle = handle.replace(/^@+/, '').replace(/\\/+$/, '').split('?')[0].trim().toLowerCase();\n  if (!handle) return null;\n  // Instagram handles: letters, numbers, periods, underscores, max 30 chars.\n  if (!/^[a-z0-9._]{1,30}$/.test(handle)) return null;\n  const reserved = new Set(['p', 'reel', 'reels', 'explore', 'stories', 'accounts', 'direct', 'tv']);\n  if (reserved.has(handle)) return null;\n  return handle;\n}\n\nfunction instagramUrl(handle) {\n  const h = normalizeHandle(handle);\n  return h ? `https://www.instagram.com/${h}/` : null;\n}\n\n/** Absolute, lowercase-host URL with tracking parameters removed. */\nfunction normalizeUrl(value) {\n  if (!value) return null;\n  let raw = String(value).trim();\n  if (!raw || raw === '-' || raw.toLowerCase() === 'n/a') return null;\n  if (!/^https?:\\/\\//i.test(raw)) raw = `https://${raw}`;\n  let url;\n  try {\n    url = new URL(raw);\n  } catch {\n    return null;\n  }\n  if (!/^[a-z0-9.-]+\\.[a-z]{2,}$/i.test(url.hostname)) return null;\n  for (const key of [...url.searchParams.keys()]) {\n    if (/^(utm_|fbclid|gclid|mc_|ref|source)/i.test(key)) url.searchParams.delete(key);\n  }\n  url.hostname = url.hostname.toLowerCase();\n  url.hash = '';\n  const path = url.pathname.replace(/\\/+$/, '');\n  return `${url.protocol}//${url.hostname}${path}${url.search}`;\n}\n\n// Link-in-bio aggregators are not a website - they must never become a dedupe key.\nconst AGGREGATOR_DOMAINS = new Set([\n  'linktr.ee', 'link.tree', 'beacons.ai', 'bio.link', 'linkin.bio', 'msha.ke',\n  'taplink.cc', 'lnk.bio', 'solo.to', 'campsite.bio', 'linkpop.com', 'many.link',\n  'instagram.com', 'facebook.com', 'm.facebook.com', 'business.facebook.com',\n  'tiktok.com', 'youtube.com', 'twitter.com', 'x.com', 'wa.me', 'api.whatsapp.com',\n  'g.page', 'goo.gl', 'maps.google.com', 'yelp.com', 'booksy.com', 'vagaro.com',\n  'square.site', 'squareup.com', 'calendly.com', 'sites.google.com'\n]);\n\nfunction isAggregatorDomain(domain) {\n  if (!domain) return false;\n  const d = String(domain).toLowerCase().replace(/^www\\./, '');\n  return AGGREGATOR_DOMAINS.has(d);\n}\n\n/** Registrable-ish domain: host without www, aggregators rejected. */\nfunction normalizeDomain(value) {\n  const url = normalizeUrl(value);\n  if (!url) return null;\n  let host;\n  try {\n    host = new URL(url).hostname.toLowerCase().replace(/^www\\./, '');\n  } catch {\n    return null;\n  }\n  if (isAggregatorDomain(host)) return null;\n  return host;\n}\n\n/** US phone to E.164. Anything that is not a plausible US number returns null. */\nfunction normalizePhone(value, defaultCountry = '1') {\n  if (!value) return null;\n  const raw = String(value);\n  if (/ext|x\\d{3,}/i.test(raw) === false && raw.trim().startsWith('+')) {\n    const intl = raw.replace(/[^\\d+]/g, '');\n    if (/^\\+\\d{8,15}$/.test(intl)) return intl;\n  }\n  const digits = raw.replace(/\\D/g, '');\n  if (!digits) return null;\n  let national = digits;\n  if (national.length === 11 && national.startsWith('1')) national = national.slice(1);\n  if (national.length !== 10) return null;\n  if (/^[01]/.test(national)) return null;              // invalid NANP area code\n  if (/^(\\d)\\1{9}$/.test(national)) return null;        // 5555555555 style junk\n  return `+${defaultCountry}${national}`;\n}\n\nfunction normalizeEmail(value) {\n  if (!value) return null;\n  const email = String(value).trim().toLowerCase().replace(/^mailto:/, '');\n  if (!/^[^\\s@]+@[^\\s@]+\\.[a-z]{2,}$/.test(email)) return null;\n  const local = email.split('@')[0];\n  if (/^(noreply|no-reply|donotreply|postmaster|abuse|privacy)$/.test(local)) return null;\n  return email;\n}\n\n/** Accepts \"California\", \"california\", \"CA\", \"Calif.\" -> \"CA\". */\nfunction normalizeState(value) {\n  if (!value) return null;\n  const raw = String(value).trim();\n  const upper = raw.toUpperCase();\n  if (STATE_CODES.has(upper)) return upper;\n  const key = stripDiacritics(raw).toLowerCase().replace(/[^a-z\\s]/g, '').trim();\n  if (US_STATES[key]) return US_STATES[key];\n  const prefix = Object.keys(US_STATES).find((name) => name.startsWith(key) && key.length >= 4);\n  return prefix ? US_STATES[prefix] : null;\n}\n\nfunction normalizeCity(value) {\n  if (!value) return null;\n  const city = collapseWhitespace(stripDiacritics(value).replace(/[^\\p{L}\\s.'-]/gu, ' '));\n  if (!city || city.length < 2) return null;\n  return city\n    .toLowerCase()\n    .split(' ')\n    .map((w) => (w.length > 2 || /^(st|ft)$/.test(w) ? w[0].toUpperCase() + w.slice(1) : w))\n    .join(' ');\n}\n\nfunction slug(value) {\n  return stripDiacritics(String(value ?? ''))\n    .toLowerCase()\n    .replace(/[^a-z0-9]+/g, '')\n    .slice(0, 40);\n}\n\n/** \"12.3k\" / \"1,234\" / \"2.1M\" -> integer. */\nfunction parseCount(value) {\n  if (value === null || value === undefined || value === '') return null;\n  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;\n  const raw = String(value).trim().toLowerCase().replace(/,/g, '').replace(/\\s/g, '');\n  const match = raw.match(/^([\\d.]+)([km])?$/);\n  if (!match) return null;\n  const n = Number.parseFloat(match[1]);\n  if (!Number.isFinite(n)) return null;\n  const mult = match[2] === 'k' ? 1e3 : match[2] === 'm' ? 1e6 : 1;\n  return Math.round(n * mult);\n}\n\nfunction toIsoDate(value) {\n  if (!value) return null;\n  const d = value instanceof Date ? value : new Date(value);\n  return Number.isNaN(d.getTime()) ? null : d.toISOString();\n}\n\nfunction daysSince(value, now = new Date()) {\n  const iso = toIsoDate(value);\n  if (!iso) return null;\n  return Math.floor((now.getTime() - new Date(iso).getTime()) / 86400000);\n}\n\n/**\n * Normalise a raw discovery row into the canonical lead shape every downstream\n * step expects. Unknown provider fields are kept under `raw`.\n */\nfunction normalizeRawLead(raw = {}) {\n  const pick = (...keys) => {\n    for (const k of keys) {\n      const v = k.split('.').reduce((o, part) => (o == null ? o : o[part]), raw);\n      if (v !== undefined && v !== null && v !== '') return v;\n    }\n    return null;\n  };\n\n  const name = cleanBusinessName(pick('business_name', 'name', 'title', 'fullName', 'ownerFullName'));\n  const handle = normalizeHandle(pick('instagram_handle', 'username', 'instagram', 'instagramUrl', 'instagram_url'));\n  const website = normalizeUrl(pick('website', 'url', 'externalUrl', 'external_url', 'site'));\n  const domain = normalizeDomain(website);\n  const state = normalizeState(pick('state', 'region', 'administrativeArea', 'address.state'));\n  const city = normalizeCity(pick('city', 'locality', 'address.city'));\n  const products = toProductList(pick('products_services', 'products', 'services', 'menu', 'categories'));\n\n  return {\n    business_name: name,\n    name_normalized: normalizeBusinessName(name),\n    instagram_handle: handle,\n    instagram_url: instagramUrl(handle) ?? normalizeUrl(pick('instagram_url', 'instagramUrl')),\n    website,\n    website_domain: domain,\n    email: normalizeEmail(pick('email', 'emails.0', 'contact_email')),\n    phone: pick('phone', 'phoneNumber', 'phone_number', 'telephone'),\n    phone_e164: normalizePhone(pick('phone', 'phoneNumber', 'phone_number', 'telephone')),\n    country: pick('country', 'countryCode') ?? 'US',\n    state,\n    city,\n    postal_code: pick('postal_code', 'postalCode', 'zip'),\n    address: pick('address', 'formattedAddress', 'street'),\n    latitude: numberOrNull(pick('latitude', 'location.lat', 'lat')),\n    longitude: numberOrNull(pick('longitude', 'location.lng', 'lng')),\n    category: pick('category', 'categoryName', 'businessCategoryName', 'business_category'),\n    bio: pick('bio', 'biography', 'description'),\n    website_description: pick('website_description', 'meta_description'),\n    products_services: products,\n    products_count: products.length || parseCount(pick('products_count', 'productsCount')),\n    ig_followers: parseCount(pick('ig_followers', 'followersCount', 'followers', 'follower_count')),\n    ig_following: parseCount(pick('ig_following', 'followsCount', 'following')),\n    ig_posts: parseCount(pick('ig_posts', 'postsCount', 'posts', 'media_count')),\n    ig_is_business: boolOrNull(pick('ig_is_business', 'isBusinessAccount', 'is_business_account')),\n    ig_is_private: boolOrNull(pick('ig_is_private', 'private', 'is_private')),\n    ig_is_verified: boolOrNull(pick('ig_is_verified', 'verified', 'is_verified')),\n    ig_last_post_at: toIsoDate(pick('ig_last_post_at', 'latestPostDate', 'last_post_at')),\n    ig_external_url: normalizeUrl(pick('externalUrl', 'external_url', 'bio_link')),\n    place_id: pick('place_id', 'placeId', 'fid'),\n    source: pick('source', '_source') ?? 'unknown',\n    source_search_term: pick('search_term', 'searchString', 'query'),\n    raw\n  };\n}\n\nfunction numberOrNull(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction boolOrNull(v) {\n  if (v === true || v === false) return v;\n  if (v === 'true') return true;\n  if (v === 'false') return false;\n  return null;\n}\n\n/** Products/services arrive as arrays, comma strings or objects. */\nfunction toProductList(value) {\n  if (!value) return [];\n  let items = [];\n  if (Array.isArray(value)) items = value;\n  else if (typeof value === 'string') items = value.split(/[,;|\\n]/);\n  else if (typeof value === 'object') items = Object.values(value);\n  const seen = new Set();\n  const out = [];\n  for (const item of items) {\n    const label = collapseWhitespace(\n      typeof item === 'string' ? item : (item?.name ?? item?.title ?? item?.label ?? '')\n    );\n    if (!label || label.length < 2 || label.length > 120) continue;\n    const key = label.toLowerCase();\n    if (seen.has(key)) continue;\n    seen.add(key);\n    out.push(label);\n  }\n  return out;\n}\n\n// ---- lib/dedupe.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Deduplication.\n// Two walls stop a business being contacted twice:\n//   1. this module, in memory, inside a discovery batch;\n//   2. resolve_company() + unique(campaign_id, company_id) in the database.\n// Both use the same identity keys, in the same priority order.\n// ---------------------------------------------------------------------------\n\nconst KEY_PRIORITY = ['instagram_handle', 'website_domain', 'place_id', 'phone_e164', 'email', 'name_city'];\n\n/** Every identity key a lead carries, strongest first. */\nfunction identityKeys(lead = {}) {\n  const keys = [];\n  const handle = normalizeHandle(lead.instagram_handle);\n  const domain = normalizeDomain(lead.website_domain ?? lead.website);\n  const phone = normalizePhone(lead.phone_e164 ?? lead.phone);\n  const email = normalizeEmail(lead.email);\n  const name = lead.name_normalized ?? normalizeBusinessName(lead.business_name);\n\n  if (handle) keys.push({ key_type: 'instagram_handle', key_value: handle });\n  if (domain) keys.push({ key_type: 'website_domain', key_value: domain });\n  if (lead.place_id) keys.push({ key_type: 'place_id', key_value: String(lead.place_id) });\n  if (phone) keys.push({ key_type: 'phone_e164', key_value: phone });\n  if (email) keys.push({ key_type: 'email', key_value: email });\n  if (name) {\n    keys.push({\n      key_type: 'name_city',\n      key_value: `${name}|${(lead.city ?? '').toLowerCase()}|${(lead.state ?? '').toUpperCase()}`\n    });\n  }\n  return keys;\n}\n\n/** Levenshtein distance, iterative, two-row. */\nfunction levenshtein(a = '', b = '') {\n  if (a === b) return 0;\n  if (!a.length) return b.length;\n  if (!b.length) return a.length;\n  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);\n  for (let i = 0; i < a.length; i += 1) {\n    const cur = [i + 1];\n    for (let j = 0; j < b.length; j += 1) {\n      cur[j + 1] = Math.min(prev[j + 1] + 1, cur[j] + 1, prev[j] + (a[i] === b[j] ? 0 : 1));\n    }\n    prev = cur;\n  }\n  return prev[b.length];\n}\n\n/** 0..1 similarity blending edit distance with token overlap. */\nfunction nameSimilarity(a, b) {\n  const x = normalizeBusinessName(a);\n  const y = normalizeBusinessName(b);\n  if (!x || !y) return 0;\n  if (x === y) return 1;\n  const edit = 1 - levenshtein(x, y) / Math.max(x.length, y.length);\n  const ta = new Set(x.split(' '));\n  const tb = new Set(y.split(' '));\n  const inter = [...ta].filter((t) => tb.has(t)).length;\n  const jaccard = inter / (ta.size + tb.size - inter);\n  return Math.max(0, Math.min(1, 0.5 * edit + 0.5 * jaccard));\n}\n\n/**\n * Do two leads describe the same business?\n * Strong keys decide on their own. A name match only counts when the location\n * agrees, so \"Glow Medspa, Austin\" never merges into \"Glow Medspa, Miami\".\n */\nfunction isLikelySame(a, b, { nameThreshold = 0.92 } = {}) {\n  const ka = identityKeys(a);\n  const kb = identityKeys(b);\n  for (const type of KEY_PRIORITY) {\n    if (type === 'name_city') continue;\n    const va = ka.find((k) => k.key_type === type)?.key_value;\n    const vb = kb.find((k) => k.key_type === type)?.key_value;\n    if (va && vb) {\n      if (va === vb) return { same: true, matched_on: type, confidence: 1 };\n      if (type === 'instagram_handle' || type === 'website_domain') {\n        // Conflicting strong keys mean these really are different businesses.\n        return { same: false, matched_on: null, confidence: 0, conflict: type };\n      }\n    }\n  }\n  const sim = nameSimilarity(a.business_name, b.business_name);\n  const sameCity = (a.city ?? '').toLowerCase() === (b.city ?? '').toLowerCase() && Boolean(a.city);\n  const sameState = (a.state ?? '').toUpperCase() === (b.state ?? '').toUpperCase() && Boolean(a.state);\n  if (sim >= nameThreshold && sameCity && sameState) {\n    return { same: true, matched_on: 'name_city', confidence: sim };\n  }\n  return { same: false, matched_on: null, confidence: sim };\n}\n\n/**\n * Collapse a discovery batch.\n * Returns { unique, duplicates } where each duplicate records what it matched.\n * Records are merged field-by-field so the surviving row keeps the best value\n * from every copy (a handle from one source, a phone from another).\n */\nfunction dedupeBatch(leads = [], options = {}) {\n  const index = new Map();       // key -> position in unique[]\n  const unique = [];\n  const duplicates = [];\n\n  for (const lead of leads) {\n    const keys = identityKeys(lead);\n    let hitIndex = -1;\n    let matchedOn = null;\n\n    for (const type of KEY_PRIORITY) {\n      const key = keys.find((k) => k.key_type === type);\n      if (!key) continue;\n      const found = index.get(`${key.key_type}:${key.key_value}`);\n      if (found !== undefined) {\n        hitIndex = found;\n        matchedOn = key.key_type;\n        break;\n      }\n    }\n\n    if (hitIndex === -1) {\n      // No exact key hit: fall back to fuzzy comparison against same-city rows.\n      for (let i = 0; i < unique.length; i += 1) {\n        const verdict = isLikelySame(unique[i], lead, options);\n        if (verdict.same) {\n          hitIndex = i;\n          matchedOn = verdict.matched_on;\n          break;\n        }\n      }\n    }\n\n    if (hitIndex === -1) {\n      unique.push({ ...lead });\n      const position = unique.length - 1;\n      for (const key of keys) index.set(`${key.key_type}:${key.key_value}`, position);\n    } else {\n      duplicates.push({ lead, duplicate_of: unique[hitIndex], matched_on: matchedOn });\n      unique[hitIndex] = mergeLeads(unique[hitIndex], lead);\n      for (const key of identityKeys(unique[hitIndex])) {\n        if (!index.has(`${key.key_type}:${key.key_value}`)) {\n          index.set(`${key.key_type}:${key.key_value}`, hitIndex);\n        }\n      }\n    }\n  }\n\n  return { unique, duplicates };\n}\n\n/** Gap-filling merge: never replace a known value with null, prefer richer lists. */\nfunction mergeLeads(base, incoming) {\n  const out = { ...base };\n  for (const [field, value] of Object.entries(incoming)) {\n    if (value === null || value === undefined || value === '') continue;\n    const current = out[field];\n    if (current === null || current === undefined || current === '') {\n      out[field] = value;\n      continue;\n    }\n    if (Array.isArray(value) && Array.isArray(current)) {\n      const merged = [...current];\n      const seen = new Set(current.map((v) => String(v).toLowerCase()));\n      for (const item of value) {\n        const key = String(item).toLowerCase();\n        if (!seen.has(key)) { seen.add(key); merged.push(item); }\n      }\n      out[field] = merged;\n      continue;\n    }\n    if (typeof value === 'number' && typeof current === 'number') {\n      // Counts: trust the larger, more complete observation.\n      if (/^(ig_followers|ig_following|ig_posts|products_count)$/.test(field)) {\n        out[field] = Math.max(current, value);\n      }\n      continue;\n    }\n    if (field === 'raw' && typeof value === 'object') {\n      out.raw = { ...(current ?? {}), ...value };\n    }\n  }\n  out.products_count = (out.products_services ?? []).length || out.products_count || null;\n  return out;\n}\n\n// ---- node logic ----\n// Merge before filtering: a sparse duplicate often carries the handle or phone\n// that identifies a richer copy, so collapsing first loses nothing.\nconst term = $('For Each Search Term').first().json;\nconst rows = $input.all().map((i) => i.json).flatMap((r) => Array.isArray(r) ? r : [r]);\n\nconst normalised = rows\n  .filter((row) => row && (row.title || row.name || row.username || row.business_name))\n  .map((row) => normalizeRawLead({\n    ...row,\n    business_name: row.business_name ?? row.title ?? row.name ?? row.fullName,\n    instagram_handle: row.instagram_handle ?? row.instagram ?? row.instagramUrl ?? row.username,\n    category: row.category ?? row.categoryName,\n    products_services: row.products_services ?? row.categories,\n    place_id: row.place_id ?? row.placeId ?? row.fid,\n    city: row.city ?? term.city,\n    state: row.state ?? term.state,\n    source: row.source ?? 'google_maps',\n    search_term: term.query\n  }));\n\nconst { unique, duplicates } = dedupeBatch(normalised);\n\nreturn unique.map((lead) => ({ json: {\n  campaign_id: term.campaign_id,\n  lead,\n  identity_keys: identityKeys(lead),\n  batch_stats: { scraped: rows.length, normalised: normalised.length, unique: unique.length, in_batch_duplicates: duplicates.length },\n  search_term: term.query\n} }));\n"
+      },
+      "id": "44eb3fbf08fe089e8da69500",
+      "name": "Normalise + Dedupe Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        300
+      ],
+      "notes": "In-memory deduplication. The database is the second wall - resolve_company() matches on the same identity keys."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/resolve_company",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_name: $json.lead.business_name,\n    p_name_normalized: $json.lead.name_normalized,\n    p_instagram_handle: $json.lead.instagram_handle,\n    p_website_domain: $json.lead.website_domain,\n    p_phone_e164: $json.lead.phone_e164,\n    p_email: $json.lead.email,\n    p_city: $json.lead.city,\n    p_state: $json.lead.state,\n    p_place_id: $json.lead.place_id,\n    p_attrs: $json.lead\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "4f57bf941679e1696e7babbb",
+      "name": "Resolve Company (dedupe)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Returns the existing company when any identity key matches, otherwise creates one. Every key seen is recorded, so a later hit on ANY of them lands on the same row."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/is_suppressed",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ p_company_id: $json.id }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "50c1e841acba6419bf466016",
+      "name": "Suppressed?",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2180,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "Opt-outs and do-not-contact are checked before a lead is ever created."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json === false || $json.is_suppressed === false }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "afe6c41ed207f94cf5b13e02",
+      "name": "Not Suppressed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/upsert_lead",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    p_campaign_id: $('Normalise + Dedupe Batch').item.json.campaign_id,\n    p_company_id: $('Resolve Company (dedupe)').item.json.id,\n    p_source: $('Normalise + Dedupe Batch').item.json.lead.source,\n    p_search_term: $('Normalise + Dedupe Batch').item.json.search_term\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "4bedf4bf6cb5e49b8e20e197",
+      "name": "Create Lead (SCRAPED)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notes": "unique(campaign_id, company_id) guarantees a business is never queued twice inside one campaign."
+    },
+    {
+      "parameters": {},
+      "id": "1ccd9235ed0572adf260dde7",
+      "name": "Skip Suppressed",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2660,
+        490
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "\nconst items = $input.all();\nconst stats = $('Normalise + Dedupe Batch').all().map((i) => i.json.batch_stats).pop() || {};\nreturn [{ json: {\n  campaign_id: $('Load Campaign + Niche').first().json.id,\n  items_in: stats.scraped || 0,\n  items_ok: items.length,\n  items_failed: 0,\n  cursor: { last_search_term: $('For Each Search Term').first().json.query, term_index: $('For Each Search Term').first().json.term_index }\n} }];\n"
+      },
+      "id": "78f276fd036b7b0f8783d0b1",
+      "name": "Summarise Batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/workflow_runs?execution_id=eq.{{ $execution.id }}&workflow=eq.wf01-lead-discovery",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n    status: $json.items_failed > 0 ? 'PARTIAL' : 'SUCCESS',\n    items_in: $json.items_in || 0,\n    items_ok: $json.items_ok || 0,\n    items_failed: $json.items_failed || 0,\n    cursor: $json.cursor || {},\n    finished_at: new Date().toISOString()\n  }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "af85352a908ad1869d4ade53",
+      "name": "Finish Run Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3140,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// ---- lib/retry.js (generated from source - do not edit here) ----\n// ---------------------------------------------------------------------------\n// Error classification, backoff and rate-limit handling.\n// Used by every node that talks to an external service. The contract is simple:\n// classify -> decide retry -> compute delay -> record. One failed lead never\n// stops a campaign, and a rate limit pauses only the provider that raised it.\n// ---------------------------------------------------------------------------\n\nconst ERROR_TYPES = ['rate_limit', 'timeout', 'auth', 'validation', 'provider_error', 'ai_schema', 'network', 'unknown'];\n\nconst RETRYABLE = new Set(['rate_limit', 'timeout', 'provider_error', 'network', 'ai_schema']);\n\n/** Map an HTTP status / thrown error onto one of ERROR_TYPES. */\nfunction classifyError(error = {}) {\n  const status = error.status ?? error.httpCode ?? error.statusCode ?? error.response?.status ?? null;\n  const message = String(error.message ?? error.error ?? error ?? '');\n\n  if (status === 429) return 'rate_limit';\n  if (status === 408 || /timeout|etimedout|esockettimedout|aborted/i.test(message)) return 'timeout';\n  if (status === 401 || status === 403) return 'auth';\n  if (status === 400 || status === 422) return 'validation';\n  if (status && status >= 500) return 'provider_error';\n  if (/econnreset|enotfound|econnrefused|socket hang up|network/i.test(message)) return 'network';\n  if (/schema|json|unexpected token|failed to parse/i.test(message)) return 'ai_schema';\n  if (/rate limit|too many requests|quota/i.test(message)) return 'rate_limit';\n  return 'unknown';\n}\n\nfunction isRetryable(errorType) {\n  return RETRYABLE.has(errorType);\n}\n\n/**\n * Exponential backoff with full jitter, honouring Retry-After when present.\n * 2s, 4s, 8s, 16s ... capped.\n */\nfunction backoffMs(attempt, { baseMs = 2000, capMs = 300000, retryAfterSeconds = null, jitter = true } = {}) {\n  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {\n    return Math.min(capMs, Number(retryAfterSeconds) * 1000);\n  }\n  const exponential = Math.min(capMs, baseMs * 2 ** Math.max(0, attempt - 1));\n  if (!jitter) return exponential;\n  return Math.floor(exponential / 2 + Math.random() * (exponential / 2));\n}\n\nfunction retryAfterFrom(headers = {}) {\n  const raw = headers['retry-after'] ?? headers['Retry-After'] ?? headers['x-ratelimit-reset-after'];\n  if (raw == null) return null;\n  const seconds = Number(raw);\n  if (Number.isFinite(seconds)) return seconds;\n  const when = Date.parse(raw);\n  return Number.isFinite(when) ? Math.max(0, Math.round((when - Date.now()) / 1000)) : null;\n}\n\n/**\n * Decision object for a failed item.\n * `dead_letter` means: stop retrying, keep the row in `errors`, carry on with\n * the rest of the batch.\n */\nfunction decideRetry({ error, attempt = 1, maxRetries = 3, headers = {} } = {}) {\n  const errorType = classifyError(error);\n  const retryable = isRetryable(errorType);\n  const exhausted = attempt >= maxRetries;\n  return {\n    error_type: errorType,\n    retryable,\n    retry: retryable && !exhausted,\n    dead_letter: !retryable || exhausted,\n    delay_ms: retryable ? backoffMs(attempt, { retryAfterSeconds: retryAfterFrom(headers) }) : 0,\n    attempt,\n    max_retries: maxRetries,\n    reason: !retryable\n      ? `${errorType} is not retryable`\n      : exhausted\n        ? `retry budget exhausted after ${attempt} attempts`\n        : `retrying after backoff`\n  };\n}\n\n/** Wrap an async call with retries. Used by scripts; n8n uses its own node retry plus this classifier. */\nasync function withRetry(fn, { maxRetries = 3, onRetry = null, sleep = defaultSleep } = {}) {\n  let lastError;\n  for (let attempt = 1; attempt <= maxRetries; attempt += 1) {\n    try {\n      return await fn(attempt);\n    } catch (error) {\n      lastError = error;\n      const decision = decideRetry({ error, attempt, maxRetries, headers: error?.headers ?? {} });\n      if (onRetry) onRetry(decision, error);\n      if (!decision.retry) break;\n      await sleep(decision.delay_ms);\n    }\n  }\n  throw lastError;\n}\n\nfunction defaultSleep(ms) {\n  return new Promise((resolve) => setTimeout(resolve, ms));\n}\n\n/** Simple token-bucket guard so a workflow paces itself against a provider. */\nfunction rateLimiter({ perMinute = 60 } = {}) {\n  const intervalMs = 60000 / perMinute;\n  let nextAt = 0;\n  return {\n    async take(sleep = defaultSleep) {\n      const now = Date.now();\n      const wait = Math.max(0, nextAt - now);\n      nextAt = Math.max(now, nextAt) + intervalMs;\n      if (wait > 0) await sleep(wait);\n      return wait;\n    }\n  };\n}\n\n// ---- node logic ----\nconst out = [];\nfor (const item of $input.all()) {\n  const json = item.json || {};\n  const error = json.error || json.$error || json;\n  const status = error.status || error.httpCode || json.statusCode || null;\n  const decision = decideRetry({\n    error: { status, message: error.message || error.description || JSON.stringify(error).slice(0, 500) },\n    attempt: (json.retry_count || 0) + 1,\n    maxRetries: 3,\n    headers: json.headers || {}\n  });\n  out.push({ json: {\n    lead_id: json.lead_id ?? null,\n    campaign_id: json.campaign_id ?? null,\n    workflow: \"wf01-lead-discovery\",\n    provider: json.provider ?? null,\n    http_status: status,\n    error_type: decision.error_type,\n    error_message: error.message || String(error).slice(0, 500),\n    retryable: decision.retryable,\n    dead_letter: decision.dead_letter,\n    delay_ms: decision.delay_ms,\n    payload: { node: json.node ?? null, stage: json.stage ?? null }\n  } });\n}\nreturn out;\n"
+      },
+      "id": "f24ec81d7f471d7bb1b4aada",
+      "name": "Classify Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        680
+      ],
+      "notes": "Uses the same classifier as the test suite: 429 backs off, 5xx retries, 401/422 dead-letters immediately."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/errors",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaign_id: $json.campaign_id, workflow: $json.workflow, node: 'Run Scraper (Apify)', error_type: $json.error_type, message: $json.error_message, http_status: $json.http_status, payload: $json.payload, execution_id: $execution.id, next_retry_at: new Date(Date.now() + ($json.delay_ms || 60000)).toISOString() }) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": false
+            }
+          }
+        }
+      },
+      "id": "99a1d69c4ba5fb6a1cb4470c",
+      "name": "Log Discovery Error",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1940,
+        680
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "supabase-service-role",
+          "name": "Supabase Service Role"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Daily Discovery": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called By Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Load Campaign + Niche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Campaign + Niche": {
+      "main": [
+        [
+          {
+            "node": "Start Run Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Run Record": {
+      "main": [
+        [
+          {
+            "node": "Build Search Terms",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search Terms": {
+      "main": [
+        [
+          {
+            "node": "For Each Search Term",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "For Each Search Term": {
+      "main": [
+        [
+          {
+            "node": "Summarise Batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run Scraper (Apify)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Scraper (Apify)": {
+      "main": [
+        [
+          {
+            "node": "Normalise + Dedupe Batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Classify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise + Dedupe Batch": {
+      "main": [
+        [
+          {
+            "node": "Resolve Company (dedupe)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Company (dedupe)": {
+      "main": [
+        [
+          {
+            "node": "Suppressed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suppressed?": {
+      "main": [
+        [
+          {
+            "node": "Not Suppressed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Suppressed": {
+      "main": [
+        [
+          {
+            "node": "Create Lead (SCRAPED)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Suppressed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Lead (SCRAPED)": {
+      "main": [
+        [
+          {
+            "node": "For Each Search Term",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Suppressed": {
+      "main": [
+        [
+          {
+            "node": "For Each Search Term",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarise Batch": {
+      "main": [
+        [
+          {
+            "node": "Finish Run Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Failure": {
+      "main": [
+        [
+          {
+            "node": "Log Discovery Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Discovery Error": {
+      "main": [
+        [
+          {
+            "node": "For Each Search Term",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "optiflow"
+    },
+    {
+      "name": "discovery"
+    }
+  ],
+  "meta": {
+    "description": "Discover businesses for a campaign and land them at stage SCRAPED.",
+    "generatedBy": "n8n/build.mjs - edit n8n/src/*.mjs and rerun `npm run build:n8n`"
+  },
+  "versionId": "e240172b8ac82a586a1d5878"
+}
