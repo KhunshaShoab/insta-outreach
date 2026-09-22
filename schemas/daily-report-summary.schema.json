@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "optiflow/daily_report_summary",
+  "title": "Daily report narrative",
+  "type": "object",
+  "required": ["headline", "observations"],
+  "additionalProperties": false,
+  "properties": {
+    "headline": { "type": "string", "minLength": 10, "maxLength": 300 },
+    "observations": { "type": "array", "maxItems": 12, "items": { "type": "string", "maxLength": 400 } },
+    "segments_too_small_to_read": { "type": "array", "maxItems": 20, "items": { "type": "string", "maxLength": 200 } },
+    "questions_seen": {
+      "type": "array", "maxItems": 12,
+      "items": { "type": "object", "required": ["theme"], "additionalProperties": false, "properties": { "theme": { "type": "string", "maxLength": 200 }, "count": { "type": "number", "minimum": 0 } } }
+    },
+    "objections_seen": {
+      "type": "array", "maxItems": 12,
+      "items": { "type": "object", "required": ["theme"], "additionalProperties": false, "properties": { "theme": { "type": "string", "maxLength": 200 }, "count": { "type": "number", "minimum": 0 } } }
+    },
+    "attention": {
+      "type": "array", "maxItems": 10,
+      "items": { "type": "object", "required": ["issue"], "additionalProperties": false, "properties": { "issue": { "type": "string", "maxLength": 200 }, "detail": { "type": "string", "maxLength": 500 }, "suggested_action": { "type": "string", "maxLength": 300 } } }
+    },
+    "notes_for_tomorrow": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } }
+  }
+}

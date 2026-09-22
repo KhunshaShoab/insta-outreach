@@ -12,7 +12,7 @@
       "day_offset": 0,
       "kind": "initial",
       "label": "Initial DM",
-      "prompt": "07-outreach-message",
+      "prompt": "05-outreach-message",
       "intent": "Open a conversation with one specific observation and one relevant question."
     },
     {
@@ -20,7 +20,7 @@
       "day_offset": 2,
       "kind": "followup_1",
       "label": "Follow-up #1 - short continuation",
-      "prompt": "10-followup-message",
+      "prompt": "06-followup-message",
       "intent": "One or two lines that continue the original thought. Never 'just following up'. Re-state the specific observation in different words and make replying take five seconds.",
       "max_chars": 300
     },
@@ -29,7 +29,7 @@
       "day_offset": 5,
       "kind": "followup_2",
       "label": "Follow-up #2 - business observation / value",
-      "prompt": "10-followup-message",
+      "prompt": "06-followup-message",
       "intent": "Add something they did not have before: a concrete observation about how similar brands in their niche handle this, or a number from comparable work. No pitch deck, no service list.",
       "max_chars": 450
     },
@@ -38,7 +38,7 @@
       "day_offset": 9,
       "kind": "followup_3_final",
       "label": "Final follow-up - close the loop",
-      "prompt": "10-followup-message",
+      "prompt": "06-followup-message",
       "intent": "Respectful close-the-loop. Acknowledge the timing may be wrong, leave the door open, ask nothing more than a yes/no. This is the last automated touch.",
       "max_chars": 300,
       "final": true

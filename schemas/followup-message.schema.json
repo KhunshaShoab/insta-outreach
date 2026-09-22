@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "optiflow/followup_message",
+  "title": "Follow-up message output",
+  "type": "object",
+  "required": ["message", "reason_for_this_followup", "self_check"],
+  "additionalProperties": false,
+  "properties": {
+    "message": { "type": "string", "minLength": 15, "maxLength": 900 },
+    "char_count": { "type": "number", "minimum": 0 },
+    "reason_for_this_followup": { "type": "string", "minLength": 15, "maxLength": 500 },
+    "references": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+    "self_check": {
+      "type": "object",
+      "required": ["not_just_following_up", "adds_new_information", "under_max_chars"],
+      "additionalProperties": false,
+      "properties": {
+        "not_just_following_up": { "type": "boolean" },
+        "adds_new_information": { "type": "boolean" },
+        "different_opening_from_previous": { "type": "boolean" },
+        "under_max_chars": { "type": "boolean" },
+        "no_pressure_language": { "type": "boolean" }
+      }
+    }
+  }
+}

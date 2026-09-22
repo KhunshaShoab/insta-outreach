@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "optiflow/decision_maker",
+  "title": "Decision-maker identification output",
+  "type": "object",
+  "required": ["target_contact", "contact_role", "role_category", "why_this_person", "confidence"],
+  "additionalProperties": false,
+  "properties": {
+    "target_contact": { "type": ["string", "null"], "maxLength": 120 },
+    "address_as": { "type": ["string", "null"], "maxLength": 60 },
+    "contact_role": { "type": ["string", "null"], "maxLength": 120 },
+    "role_category": {
+      "type": "string",
+      "enum": ["founder", "owner", "co_founder", "ceo", "head_of_operations", "cx_director", "support_manager", "marketing_director", "other", "unknown"]
+    },
+    "why_this_person": { "type": "string", "minLength": 20, "maxLength": 600 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "alternative_contacts": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "maxLength": 120 },
+          "role": { "type": ["string", "null"], "maxLength": 120 },
+          "why": { "type": ["string", "null"], "maxLength": 400 }
+        }
+      }
+    },
+    "no_contact_strategy": { "type": ["string", "null"], "maxLength": 500 }
+  }
+}

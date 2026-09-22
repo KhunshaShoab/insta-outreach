@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "optiflow/reply_classification",
+  "title": "Inbound reply classification",
+  "type": "object",
+  "required": ["classification", "intent", "sentiment", "urgency", "recommended_action", "stop_followups", "requires_human", "suggested_stage"],
+  "additionalProperties": false,
+  "properties": {
+    "classification": {
+      "type": "string",
+      "enum": ["interested", "curious", "question", "wants_details", "pricing", "positive", "maybe_later", "not_interested", "wrong_person", "objection", "unclear", "auto_reply", "opt_out"]
+    },
+    "intent": { "type": "string", "minLength": 3, "maxLength": 200 },
+    "sentiment": { "type": "string", "enum": ["positive", "neutral", "negative", "mixed"] },
+    "urgency": { "type": "string", "enum": ["high", "medium", "low"] },
+    "objection_type": {
+      "type": ["string", "null"],
+      "enum": ["has_internal_team", "already_outsourced", "no_budget", "no_need", "bad_timing", "trust_concern", "quality_concern", "offshore_concern", "not_decision_maker", "other", null]
+    },
+    "recommended_action": {
+      "type": "string",
+      "enum": ["continue_conversation", "answer_question", "send_pricing_context", "route_to_human", "mark_interested", "mark_nurture", "mark_not_interested", "suppress_contact", "redirect_to_named_contact", "no_action"]
+    },
+    "stop_followups": { "type": "boolean" },
+    "requires_human": { "type": "boolean" },
+    "suggested_stage": { "type": "string", "enum": ["REPLIED", "CONVERSATION", "INTERESTED", "NURTURE", "NOT_INTERESTED", "CLOSED"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "reasoning": { "type": "string", "maxLength": 600 },
+    "extracted": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "redirect_to": { "type": ["string", "null"], "maxLength": 200 },
+        "timeframe": { "type": ["string", "null"], "maxLength": 120 },
+        "constraints": { "type": "array", "items": { "type": "string", "maxLength": 200 } },
+        "other": { "type": ["string", "null"], "maxLength": 400 }
+      }
+    }
+  }
+}

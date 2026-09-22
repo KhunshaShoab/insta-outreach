@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "note": "Rules for the cleaning stage. Everything here is data, not code - edit this file to change what gets filtered out, and lib/clean.js picks it up.",
+  "blocked_keywords": {
+    "note": "Businesses we must never pitch: our own competitors, agencies that resell us, and coaching/info products that look like brands but are not.",
+    "terms": [
+      "bpo", "call center", "callcenter", "contact center", "outsourcing", "virtual assistant agency",
+      "answering service", "va agency", "staffing agency", "recruiting agency", "recruitment agency",
+      "marketing agency", "digital agency", "growth agency", "seo agency", "ads agency", "media buying",
+      "lead generation agency", "smma", "social media agency", "web design agency", "branding agency",
+      "business coach", "sales coach", "mindset coach", "online course", "masterclass", "ebook",
+      "dropshipping course", "print on demand course", "affiliate marketing", "mlm", "network marketing",
+      "crypto", "forex", "nft", "trading signals",
+      "software company", "saas platform", "crm software", "app development",
+      "franchise opportunity", "wholesale supplier", "b2b directory", "trade show", "expo"
+    ]
+  },
+  "personal_account_signals": {
+    "note": "Each matched signal adds its weight. At or above `threshold` the account is treated as personal and dropped.",
+    "threshold": 3,
+    "signals": [
+      { "id": "bio_personal_pronoun", "weight": 2, "pattern": "\\b(i'm|im a|my name is|mom of|dad of|wife|husband|girlfriend|boyfriend)\\b", "field": "bio" },
+      { "id": "personal_role", "weight": 2, "pattern": "\\b(content creator|influencer|blogger|model|photographer|artist|ugc creator|student|nurse|realtor)\\b", "field": "bio" },
+      { "id": "no_business_markers", "weight": 2, "check": "no_website_no_category_no_products" },
+      { "id": "not_business_account", "weight": 1, "check": "ig_is_business_false" },
+      { "id": "name_looks_personal", "weight": 1, "check": "name_is_person_name" },
+      { "id": "private_account", "weight": 2, "check": "ig_is_private" },
+      { "id": "link_in_bio_only", "weight": 0, "check": "aggregator_link_only" }
+    ]
+  },
+  "fan_account_markers": {
+    "note": "Accounts about a brand rather than the brand itself.",
+    "patterns": ["\\bfan (page|account)\\b", "\\bnot affiliated\\b", "\\bparody\\b", "\\bbackup account\\b", "\\bsecond account\\b"]
+  },
+  "reseller_markers": {
+    "patterns": ["\\breseller\\b", "\\bauthorized dealer\\b", "\\bdistributor of\\b", "\\bwe ship worldwide dm to order\\b", "\\bdm to order\\b", "\\breplica\\b", "\\bdupe\\b", "\\bpreorder only\\b"]
+  },
+  "absolute_bounds": {
+    "note": "Hard sanity bounds applied before any campaign-specific ICP rule.",
+    "min_followers": 300,
+    "max_followers": 250000,
+    "max_following_to_followers_ratio": 3.0,
+    "min_posts": 6,
+    "max_name_length": 120
+  },
+  "location": {
+    "require_state_match": true,
+    "allow_unknown_state_if_city_matches": true,
+    "allow_unknown_location_for_ecommerce": false,
+    "note": "E-commerce brands often hide their address. Set allow_unknown_location_for_ecommerce=true per campaign if you would rather keep them and let the AI judge."
+  },
+  "niche_match": {
+    "note": "A lead must hit at least `min_keyword_hits` niche keywords across name, bio, category, products and website description - or carry the niche's Google category.",
+    "min_keyword_hits": 1,
+    "fields": ["business_name", "bio", "category", "website_description", "products_services"],
+    "negative_keyword_drops": true
+  }
+}
