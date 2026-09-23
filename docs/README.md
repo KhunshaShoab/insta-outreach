@@ -15,3 +15,4 @@
 | 11 | [Human approval](11-human-approval.md) | The control surface and how the boundary is enforced |
 | 12 | [Follow-up logic](12-followup-logic.md) | Cadence, content rules, the reply-stop guarantee |
 | 13 | [Operations](13-operations.md) | Setup, the daily run, the report, safe changes |
+| 14 | [V1 Lead Intelligence Engine](14-v1-lead-intelligence.md) | Attach a lead file, score it, prepare outreach, review by hand |

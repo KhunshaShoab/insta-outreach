@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "note": "V1 lead intelligence settings. Everything the pipeline decides with is here.",
+  "services": {
+    "CUSTOMER_SUPPORT": {
+      "label": "Customer support outsourcing",
+      "capability_line": "outsourced support teams that add email, chat and phone capacity without growing the in-house team at the same pace",
+      "capabilities": ["Email support", "Chat support", "Phone support", "L1/L2 support", "E-commerce and order support", "Returns and refunds handling", "Extended and 24/7 coverage"]
+    },
+    "AI_VOICE": {
+      "label": "AI voice receptionist",
+      "capability_line": "an AI receptionist that answers inbound calls, handles common questions, captures caller details and books appointments",
+      "capabilities": ["Inbound call answering", "FAQ answering", "Lead capture and qualification", "Appointment booking", "After-hours answering", "Call routing"]
+    }
+  },
+  "bands": [
+    { "label": "BEST", "min": 80 },
+    { "label": "GOOD", "min": 65 },
+    { "label": "REVIEW", "min": 50 },
+    { "label": "BAD", "min": 0 }
+  ],
+  "overall_weights": { "best_service_fit": 0.60, "reachability": 0.22, "legitimacy": 0.18 },
+  "offer_thresholds": { "min_fit": 45, "both_min": 55, "both_min_signals": 2 },
+  "score_caps": { "no_website": 45, "website_unreadable": 55 },
+  "research": {
+    "timeout_ms": 15000,
+    "max_pages_per_lead": 5,
+    "concurrency": 4,
+    "generate_dm_for_classifications": ["BEST", "GOOD"],
+    "generate_dm_for_offers": ["CUSTOMER_SUPPORT", "AI_VOICE", "BOTH"]
+  },
+  "outreach": { "max_chars": 500, "sender_name": "Alex", "sender_company": "OptiFlow Solutions" },
+  "review": { "default_status": "PENDING" }
+}

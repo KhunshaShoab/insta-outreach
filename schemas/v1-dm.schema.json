@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "optiflow/v1_dm",
+  "title": "V1 personalised Instagram DM",
+  "type": "object",
+  "required": ["personalized_instagram_dm", "why_this_message", "self_check"],
+  "additionalProperties": false,
+  "properties": {
+    "personalized_instagram_dm": { "type": "string", "maxLength": 900 },
+    "char_count": { "type": "number", "minimum": 0 },
+    "observation_used": { "type": ["string", "null"], "maxLength": 400 },
+    "capability_mentioned": { "type": ["string", "null"], "maxLength": 120 },
+    "why_this_message": { "type": "string", "minLength": 5, "maxLength": 500 },
+    "self_check": {
+      "type": "object",
+      "required": ["opens_with_verified_observation", "no_invented_facts", "no_assumed_pain", "one_capability_only", "under_max_chars"],
+      "additionalProperties": false,
+      "properties": {
+        "opens_with_verified_observation": { "type": "boolean" },
+        "no_invented_facts": { "type": "boolean" },
+        "no_assumed_pain": { "type": "boolean" },
+        "one_capability_only": { "type": "boolean" },
+        "ends_with_question": { "type": "boolean" },
+        "under_max_chars": { "type": "boolean" }
+      }
+    }
+  }
+}

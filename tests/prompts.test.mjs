@@ -22,11 +22,12 @@ const SCHEMA_FILES = {
   reply_classification: 'reply-classification.schema.json',
   suggested_response: 'suggested-response.schema.json',
   conversation_analysis: 'conversation-analysis.schema.json',
-  daily_report_summary: 'daily-report-summary.schema.json'
+  daily_report_summary: 'daily-report-summary.schema.json',
+  v1_dm: 'v1-dm.schema.json'
 };
 
 test('every prompt has complete front matter and the required sections', () => {
-  assert.equal(files.length, 10, 'expected ten production prompts');
+  assert.equal(files.length, 11, 'expected eleven production prompts (ten campaign-engine, one V1)');
   for (const file of files) {
     const { meta, body } = parseFrontMatter(readFileSync(join(PROMPT_DIR, file), 'utf8'));
     assert.ok(meta.id, `${file}: missing id`);

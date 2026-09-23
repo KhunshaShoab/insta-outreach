@@ -37,10 +37,28 @@ the console, and both take the identical downstream path.
 What *is* automated is the expensive part: finding, qualifying, researching,
 personalising, queueing, tracking, following up and analysing.
 
-## Quick start
+## Two ways to use this
+
+**V1 Lead Intelligence Engine** - you have a lead list and want qualified,
+researched, message-ready leads in a spreadsheet. One command, no database, no
+n8n, no accounts beyond an optional Claude key:
 
 ```bash
-npm run check              # lint, build the 13 workflows, run 105 tests
+node scripts/v1.mjs --inspect ~/Downloads/leads.xlsx   # what is in the file
+node scripts/v1.mjs --file ~/Downloads/leads.xlsx --limit 15
+```
+
+It reads the file, deduplicates, checks each business is really in your niche,
+reads their websites, finds their Instagram, scores them for customer-support
+and AI-voice fit with the evidence attached, recommends one service or none, and
+writes a DM for the ones that earn it. Everything lands in a CSV with
+`review_status = PENDING`. See [docs/14](docs/14-v1-lead-intelligence.md).
+
+**The full campaign engine** - continuous discovery, an approval queue, reply
+handling and follow-up sequences, orchestrated in n8n:
+
+```bash
+npm run check              # lint, build the 13 workflows, run the test suite
 npm run validate:config    # check campaigns and niches are consistent
 scripts/db-test.sh         # apply the schema to a scratch DB and run the lifecycle test
 ```
@@ -51,7 +69,10 @@ Full setup is in [docs/13-operations.md](docs/13-operations.md).
 
 ```
 config/       niches, campaigns, scoring, cleaning rules, follow-up cadence,
-              provider registry        ← no ICP value lives anywhere else
+              provider registry, V1 settings  ← no ICP value lives elsewhere
+lib/v1/       V1 engine: dependency-free XLSX reader, ingest, dedupe,
+              relevance, website research, Instagram discovery, signals,
+              scoring, offer recommendation, CSV output
 lib/          pure logic: normalise, dedupe, score, rank contacts, pick angles,
               schedule follow-ups, classify errors, render prompts, validate JSON
 lib/providers/ swappable adapters: Apify, Apollo, website scrape, Claude, mock,
