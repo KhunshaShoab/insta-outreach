@@ -19,7 +19,7 @@ import { discoverInstagram } from '../lib/v1/instagram.js';
 import { buildSignals } from '../lib/v1/signals.js';
 import { scoreLead } from '../lib/v1/score.js';
 import { recommendOffer } from '../lib/v1/offer.js';
-import { detectNiche, checkRelevance, NICHE_RULES } from '../lib/v1/relevance.js';
+import { detectNiche, checkRelevance, checkExclusion, NICHE_RULES } from '../lib/v1/relevance.js';
 import { writeCsv, writeJson, reviewTable, formatSignals } from '../lib/v1/output.js';
 import { parseFrontMatter, renderPrompt } from '../lib/prompts.js';
 import { parseAiJson } from '../lib/json.js';
@@ -112,15 +112,18 @@ async function main() {
   const nicheOverride = arg('niche');
   const detected = nicheOverride ? { niche: nicheOverride, confidence: 'HIGH', matched: 0 } : detectNiche(unique);
   const nicheRule = NICHE_RULES[detected.niche] ?? NICHE_RULES.generic;
-  for (const lead of unique) Object.assign(lead, checkRelevance(lead, detected.niche));
+  for (const lead of unique) Object.assign(lead, checkRelevance(lead, detected.niche), checkExclusion(lead));
   const offNiche = unique.filter((l) => l.niche_match === 'OFF_NICHE').length;
   const uncertain = unique.filter((l) => l.niche_match === 'UNCERTAIN').length;
+  const excluded = unique.filter((l) => l.excluded).length;
   console.log(`[3/9] Relevance     niche "${detected.niche}" (${nicheRule.label}, ${detected.confidence.toLowerCase()} confidence): ${unique.length - offNiche - uncertain} in niche, ${uncertain} uncertain, ${offNiche} off niche`);
+  console.log(`      Excluded      ${excluded} competitor(s) / agency(s) / reseller(s) that must not be pitched`);
 
   // Best-documented, in-niche leads first: a first test should exercise the
   // whole pipeline, and an off-niche row with no website exercises very little.
   const nicheRank = { IN_NICHE: 0, UNCERTAIN: 1, OFF_NICHE: 2 };
   const ranked = [...unique].sort((a, b) =>
+    (a.excluded ? 1 : 0) - (b.excluded ? 1 : 0) ||
     nicheRank[a.niche_match] - nicheRank[b.niche_match] ||
     (b.domain ? 1 : 0) - (a.domain ? 1 : 0) ||
     (b.review_count ?? 0) - (a.review_count ?? 0)
@@ -182,6 +185,7 @@ async function main() {
 
   // --- 8. DM, only where the evidence supports an approach -----------------
   const wantsDm = (r) =>
+    !r.excluded &&
     r.niche_match === 'IN_NICHE' &&
     (config.research?.generate_dm_for_classifications ?? ['BEST', 'GOOD']).includes(r.classification) &&
     (config.research?.generate_dm_for_offers ?? ['CUSTOMER_SUPPORT', 'AI_VOICE', 'BOTH']).includes(r.recommended_offer);
@@ -192,7 +196,9 @@ async function main() {
   for (const record of records) {
     if (!wantsDm(record)) {
       record.personalized_instagram_dm = '';
-      record.pipeline_notes = record.niche_match !== 'IN_NICHE'
+      record.pipeline_notes = record.excluded
+        ? record.exclusion_reason
+        : record.niche_match !== 'IN_NICHE'
         ? `No DM written: ${record.niche_match_reason}`
         : record.recommended_offer === 'NONE'
           ? 'No DM written: the evidence does not support an approach.'

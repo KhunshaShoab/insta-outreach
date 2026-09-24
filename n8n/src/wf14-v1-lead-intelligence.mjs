@@ -107,12 +107,15 @@ const { unique, duplicates, groups } = dedupeLeads(leads);
 // Scraped categories are unreliable, so relevance is checked against the file's
 // own dominant niche, using the business NAME as well as the category.
 const detectedNiche = detectNiche(unique);
-for (const lead of unique) Object.assign(lead, checkRelevance(lead, detectedNiche.niche));
+// Relevance and exclusion are separate questions: a hotel is the wrong niche,
+// an outsourcing company is a competitor. Both keep a lead out of outreach.
+for (const lead of unique) Object.assign(lead, checkRelevance(lead, detectedNiche.niche), checkExclusion(lead));
 
 // In-niche and best-documented leads first - a run should spend its website
 // requests on leads that can actually produce evidence.
 const nicheRank = { IN_NICHE: 0, UNCERTAIN: 1, OFF_NICHE: 2 };
 const ranked = [...unique].sort((a, b) =>
+  (a.excluded ? 1 : 0) - (b.excluded ? 1 : 0) ||
   nicheRank[a.niche_match] - nicheRank[b.niche_match] ||
   (b.domain ? 1 : 0) - (a.domain ? 1 : 0) ||
   (b.review_count ?? 0) - (a.review_count ?? 0)
@@ -129,6 +132,7 @@ const run = {
   niche_confidence: detectedNiche.confidence,
   in_niche: unique.filter((l) => l.niche_match === 'IN_NICHE').length,
   off_niche: unique.filter((l) => l.niche_match === 'OFF_NICHE').length,
+  excluded: unique.filter((l) => l.excluded).length,
   batch_size: batch.length,
   unmapped_columns: unmapped
 };
@@ -221,6 +225,7 @@ const offer = recommendOffer(lead, { scores, signals });
 // Only in-niche leads that scored well enough and have a service to lead with
 // get a message written for them.
 const wantsMessage =
+  !lead.excluded &&
   lead.niche_match === 'IN_NICHE' &&
   (V1_CONFIG.research?.generate_dm_for_classifications ?? ['BEST', 'GOOD']).includes(scores.classification) &&
   (V1_CONFIG.research?.generate_dm_for_offers ?? ['CUSTOMER_SUPPORT', 'AI_VOICE', 'BOTH']).includes(offer.recommended_offer);
@@ -313,7 +318,9 @@ return [{ json: {
 
   const noMessage = wf.add(code('Record Why No Message', `
 const lead = $input.first().json;
-const reason = lead.niche_match !== 'IN_NICHE'
+const reason = lead.excluded
+  ? lead.exclusion_reason
+  : lead.niche_match !== 'IN_NICHE'
   ? 'No message: ' + lead.niche_match_reason
   : lead.recommended_offer === 'NONE'
     ? 'No message: the evidence does not support an approach. ' + lead.offer_reason

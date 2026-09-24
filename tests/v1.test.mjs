@@ -431,3 +431,106 @@ test('the DM prompt forbids asserting a problem the evidence cannot show', () =>
   assert.ok(body.includes('quote or paraphrase the'), 'the prompt must tie the message to the evidence field');
   assert.ok(body.includes('interpretation'), 'the prompt must distinguish evidence from interpretation');
 });
+
+// --- exclusions ------------------------------------------------------------
+
+test('a competitor is excluded, not pitched', async () => {
+  const { checkExclusion } = await import('../lib/v1/relevance.js');
+  // This is the real case: a Canadian list put "CXAi Inc." second-best, and the
+  // file held six rows whose stated industry was "Outsourcing/offshoring".
+  const cx = checkExclusion({ company_name: 'CXAi Inc.', industry: 'Information Technology & Services', keywords: ['customer experience ai', 'cx platform'] });
+  assert.equal(cx.excluded, true);
+  assert.equal(cx.exclusion_kind, 'competitor');
+
+  const bpo = checkExclusion({ company_name: 'Acme Ltd', industry: 'Outsourcing/offshoring' });
+  assert.equal(bpo.excluded, true);
+  assert.equal(bpo.exclusion_kind, 'competitor');
+
+  for (const name of ['PeakSupport BPO', 'Nova Call Center', 'Answering Service Pros', 'VoiceAI Receptionist Co']) {
+    assert.equal(checkExclusion({ company_name: name }).excluded, true, name);
+  }
+});
+
+test('an agency that would resell rather than buy is excluded', async () => {
+  const { checkExclusion } = await import('../lib/v1/relevance.js');
+  for (const lead of [
+    { company_name: 'DAASH WEB LAB', industry: 'Marketing & Advertising' },
+    { company_name: 'Bright Ideas', industry: 'Management Consulting' },
+    { company_name: 'Hire Fast', industry: 'Staffing & Recruiting' }
+  ]) {
+    const result = checkExclusion(lead);
+    assert.equal(result.excluded, true, lead.company_name);
+    assert.equal(result.exclusion_kind, 'reseller');
+  }
+});
+
+test('a genuine prospect is not excluded', async () => {
+  const { checkExclusion } = await import('../lib/v1/relevance.js');
+  for (const lead of [
+    { company_name: 'Glo Medspa', industry: 'Health, Wellness & Fitness', category: 'Medical spa' },
+    { company_name: 'Simply Delivery', industry: 'Package/freight Delivery', keywords: ['courier', 'food delivery'] },
+    { company_name: 'Anchorage Funeral Home', category: 'Funeral home' }
+  ]) {
+    assert.equal(checkExclusion(lead).excluded, false, lead.company_name);
+  }
+});
+
+test('the exclusion reason quotes the words that triggered it', async () => {
+  const { checkExclusion } = await import('../lib/v1/relevance.js');
+  const result = checkExclusion({ company_name: 'X', industry: 'Outsourcing/offshoring' });
+  assert.match(result.exclusion_reason, /"outsourcing"/i);
+  assert.match(result.exclusion_reason, /sells what OptiFlow sells/);
+});
+
+test('a stated industry outranks loose keyword tags', async () => {
+  const { checkRelevance } = await import('../lib/v1/relevance.js');
+  // An e-commerce brand's keywords routinely include "shipping" and "delivery".
+  // Before this rule, six software companies topped a logistics batch.
+  const softwareCo = {
+    company_name: 'BudSense', industry: 'Information Technology & Services',
+    keywords: ['shipping', 'delivery', 'distribution', 'software']
+  };
+  assert.notEqual(checkRelevance(softwareCo, 'logistics').niche_match, 'IN_NICHE');
+
+  const courier = { company_name: 'Simply Delivery', industry: 'Package/freight Delivery', keywords: ['courier'] };
+  assert.equal(checkRelevance(courier, 'logistics').niche_match, 'IN_NICHE');
+
+  // With no industry column, keywords are all there is, so they still count.
+  const noIndustry = { company_name: 'Acme Freight', keywords: ['freight forwarding', 'trucking'] };
+  assert.equal(checkRelevance(noIndustry, 'logistics').niche_match, 'IN_NICHE');
+});
+
+test('a person\'s mobile number and personal email are deliberately not ingested', async () => {
+  const { detectColumns, DELIBERATELY_IGNORED } = await import('../lib/v1/map-columns.js');
+  const { mapping, unmapped } = detectColumns(['Company Name', 'Email', 'Mobile Number', 'Personal Email']);
+  assert.ok(!Object.values(mapping).flat().includes('Mobile Number'));
+  assert.ok(!Object.values(mapping).flat().includes('Personal Email'));
+  assert.ok(!unmapped.includes('Mobile Number'), 'ignored on purpose, not merely unrecognised');
+  assert.ok(DELIBERATELY_IGNORED.includes('mobile number'));
+});
+
+test('"Title" is the job title when the file also names the company', async () => {
+  const { detectColumns } = await import('../lib/v1/map-columns.js');
+  // Apollo-style export: Title is the person's role.
+  const crm = detectColumns(['Company Name', 'Full Name', 'Title']);
+  assert.deepEqual(crm.mapping.job_title, ['Title']);
+  assert.deepEqual(crm.mapping.company_name, ['Company Name']);
+
+  // Google Maps export: Title is the place name.
+  const maps = detectColumns(['title', 'Category', 'Phone']);
+  assert.deepEqual(maps.mapping.company_name, ['title']);
+  assert.equal(maps.mapping.job_title, undefined);
+});
+
+test('the company location wins over the contact location', async () => {
+  const { detectColumns, mapRow } = await import('../lib/v1/map-columns.js');
+  const { mapping } = detectColumns(['Company Name', 'City', 'State', 'Company City', 'Company State']);
+  // A courier in Calgary whose owner lives in London, Ontario is a Calgary business.
+  const lead = mapRow(
+    { 'Company Name': 'Simply Delivery', City: 'London', State: 'Ontario', 'Company City': 'Calgary', 'Company State': 'Alberta', __row: 2 },
+    mapping, { sourceFile: 'canada.xlsx' }
+  );
+  assert.equal(lead.city, 'Calgary');
+  assert.equal(lead.state, 'Alberta');
+  assert.equal(lead.contact_city, 'London', 'the contact location is kept, not discarded');
+});
