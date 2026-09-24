@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url';
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const IMPORT_RE = /^\s*import\s+(?:[\s\S]*?)\s+from\s+['"](\.[^'"]+)['"];?\s*$/gm;
+// Any import at all, so a non-relative one can be reported instead of silently
+// surviving into a Code node, where it throws "Cannot use import statement".
+const ANY_IMPORT_RE = /^\s*import\s+(?:[\s\S]*?)\s+from\s+['"]([^'"]+)['"];?\s*$/gm;
 const EXPORT_PREFIX_RE = /^export\s+(?=(const|let|var|function|async function|class)\b)/gm;
 const EXPORT_STAR_RE = /^export\s+\*\s+from\s+['"][^'"]+['"];?\s*$/gm;
 
@@ -61,6 +64,19 @@ function collect(entryPaths) {
  */
 export function bundle(modules) {
   const entries = collect(modules);
+
+  for (const entry of entries) {
+    const external = [...entry.source.matchAll(ANY_IMPORT_RE)]
+      .map((m) => m[1])
+      .filter((spec) => !spec.startsWith('.'));
+    if (external.length) {
+      throw new Error(
+        `bundle: ${entry.path} imports ${external.join(', ')}, which cannot run inside an n8n Code node. ` +
+        `Move the pure logic into a module with no external imports and inline that instead.`
+      );
+    }
+  }
+
   const parts = entries.map((entry) => {
     const body = entry.source
       .replace(IMPORT_RE, '')

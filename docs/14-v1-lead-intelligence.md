@@ -1,6 +1,23 @@
 # 14. V1 Lead Intelligence Engine
 
-Attach a lead file, run one command, review a spreadsheet. Nothing is sent.
+Attach a lead file, get scored leads with a draft message in a spreadsheet.
+Nothing is sent.
+
+There are two ways to run it, sharing the same tested logic:
+
+| | n8n workflow | Command line |
+| --- | --- | --- |
+| File | `n8n/workflows/wf14-v1-lead-intelligence.json` | `scripts/v1.mjs` |
+| Input | a hosted upload form | a file path |
+| Output | Google Sheet, or a CSV download | CSV + JSON |
+| Pages read per lead | 2 (homepage, contact) | up to 5, following links |
+| Best for | handing the running of it to someone else | iterating on settings quickly |
+
+The Code nodes in the workflow are generated from `lib/v1/*` by
+`npm run build:n8n`, so both paths run the same scoring, deduplication and
+Instagram rules - not two copies that drift.
+
+## Running it in n8n
 
 ```
 XLSX/CSV → normalize → deduplicate → relevance → research → Instagram
@@ -10,7 +27,61 @@ XLSX/CSV → normalize → deduplicate → relevance → research → Instagram
 The input files live outside this repository. They are attached per run and
 passed by path, so the same pipeline runs on the next file without any change.
 
-## Running it
+1. Import `n8n/workflows/wf14-v1-lead-intelligence.json` into n8n.
+2. Create one credential: **HTTP Header Auth** named `Anthropic API Key`, header
+   `x-api-key`, value your key.
+3. Optional: a **Google Sheets OAuth** credential named `Google Sheets (OptiFlow)`,
+   and set `GOOGLE_SHEETS_SPREADSHEET_ID`. Skip it and use the CSV node instead.
+4. Activate the workflow, open the **Upload Lead File** node, copy its production
+   URL, and open that URL in a browser.
+5. Drag in your `.xlsx` or `.csv`, set how many leads to process, submit.
+
+The form asks three things: the file, how many leads this run (default 15), and
+how many to skip - so you can work through a large file in batches without
+reprocessing what you have already reviewed.
+
+Each lead costs 2 website requests and at most 1 Claude call. Start with 15.
+
+### The workflow, stage by stage
+
+```
+Upload form ─┬─> Detect File Type ─> xlsx / csv ─> Read Spreadsheet
+Manual run ──┘                                          │
+                                                        ▼
+                              Clean, Deduplicate, Check Niche
+                                                        ▼
+                                      For Each Lead (one at a time)
+                                                        ▼
+                              Build Page URLs ─> Fetch Page (x2)
+                                                        ▼
+                          Extract Evidence, Score, Recommend
+                                                        ▼
+                                          Write A Message?
+                                   ┌────────────┴────────────┐
+                                  yes                        no
+                                   ▼                          ▼
+                   Render Prompt ─> Claude ─> Parse    Record Why No Message
+                                   └────────────┬────────────┘
+                                                ▼
+                                   Shape Row For The Sheet
+                                                ▼
+                            Append To Review Sheet / CSV download
+```
+
+Two things worth knowing about the shape:
+
+- **Every lead reaches the sheet**, including the ones that get no message. A
+  skipped lead carries the reason in `pipeline_notes` rather than vanishing.
+- **A Claude failure does not lose the lead.** The model node's error output
+  routes to `Record Why No Message`, so the row still appears with an
+  explanation.
+
+`tests/wf14-n8n.test.mjs` executes every Code node in the generated workflow the
+way n8n does - inside an async function with `$input`, `$()` and `$env` - against
+real spreadsheet rows and real page markup. Generating valid JSON is not the same
+as the workflow working.
+
+## Running it from the command line
 
 ```bash
 # 1. Look at a file before processing it

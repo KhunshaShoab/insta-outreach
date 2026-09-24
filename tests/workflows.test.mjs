@@ -17,14 +17,14 @@ const EXPECTED = [
   'wf01-lead-discovery', 'wf02-clean-dedupe', 'wf03-enrichment', 'wf04-qualification',
   'wf05-research', 'wf06-outreach-generation', 'wf07-approval-queue', 'wf08-outreach-log',
   'wf09-reply-processing', 'wf10-response-assistant', 'wf11-followup-engine',
-  'wf12-analytics', 'wf13-orchestrator'
+  'wf12-analytics', 'wf13-orchestrator', 'wf14-v1-lead-intelligence'
 ];
 
 const codeNodes = (wf) => wf.nodes.filter((n) => n.type === 'n8n-nodes-base.code');
 const httpNodes = (wf) => wf.nodes.filter((n) => n.type === 'n8n-nodes-base.httpRequest');
 const bodyOf = (node) => JSON.stringify(node.parameters ?? {});
 
-test('all thirteen modular workflows are generated', () => {
+test('all fourteen workflows are generated', () => {
   assert.deepEqual(workflows.map((w) => w.name), EXPECTED);
 });
 
@@ -178,6 +178,14 @@ test('no credential value is baked into a generated workflow', () => {
   for (const key of ['ANTHROPIC_API_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'APIFY_TOKEN', 'APOLLO_API_KEY']) {
     assert.ok(blob.includes(`$env.${key}`), `${key} should be read from the environment`);
   }
+});
+
+test('the V1 workflow stands alone and shares no campaign-engine state', () => {
+  const wf = byName['wf14-v1-lead-intelligence'];
+  const blob = JSON.stringify(wf);
+  assert.ok(!blob.includes('claim_leads'), 'V1 does not touch the campaign pipeline');
+  assert.ok(!blob.includes('advance_lead'), 'V1 has no lead stage machine');
+  assert.ok(blob.includes('review_status'), 'V1 still marks every row for human review');
 });
 
 test('every workflow that claims leads uses the locking claim function', () => {

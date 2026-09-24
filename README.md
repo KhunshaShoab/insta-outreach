@@ -43,6 +43,9 @@ personalising, queueing, tracking, following up and analysing.
 researched, message-ready leads in a spreadsheet. One command, no database, no
 n8n, no accounts beyond an optional Claude key:
 
+Either import `n8n/workflows/wf14-v1-lead-intelligence.json` and upload the file
+to a form, or run it from the command line:
+
 ```bash
 node scripts/v1.mjs --inspect ~/Downloads/leads.xlsx   # what is in the file
 node scripts/v1.mjs --file ~/Downloads/leads.xlsx --limit 15

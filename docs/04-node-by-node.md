@@ -623,3 +623,70 @@ For Each Campaign (output 1) -> 1. Discovery
 Record Tick Outcome -> Store Run Record
 Store Run Record -> Respond
 ```
+
+## wf14-v1-lead-intelligence
+
+Upload a lead file: clean, deduplicate, find Instagram, score, classify and draft a message for each business. Nothing is sent.
+
+**25 nodes.** Import from `n8n/workflows/wf14-v1-lead-intelligence.json`.
+
+| Node | Type | Talks to | Reliability | Why it is there |
+| --- | --- | --- | --- | --- |
+| Upload Lead File | n8n-nodes-base.formTrigger |  | - | Open the production URL of this node and drag the file in. The two number fields let you work through a big file in batches. |
+| Run Manually | Manual Trigger |  | - |  |
+| Detect File Type | Code | inline logic | - | Fails with a readable message rather than silently producing zero leads. |
+| Spreadsheet Or CSV | Switch |  | - |  |
+| Read Spreadsheet | n8n-nodes-base.extractFromFile |  | - | Reads the first sheet. If your file keeps leads on a named sheet, set it in the node options. |
+| Read CSV | n8n-nodes-base.extractFromFile |  | - |  |
+| Clean, Deduplicate, Check Niche | Code | inlines `lib/normalize.js`, `lib/dedupe.js` | - | One node covers cleaning, deduplication and the niche check because they share the same inlined modules. Deduplication never merges two businesses that only share a corporate website. |
+| Any Leads To Process? | IF |  | - |  |
+| Nothing To Process | No Op |  | - |  |
+| For Each Lead | Loop Over Items |  | - |  |
+| Build Page URLs | Code | inline logic | - |  |
+| Has A Website? | IF |  | - |  |
+| Fetch Page | HTTP Request | HTTP | continues on fail | continueOnFail is deliberate: a small-business site behind bot protection returns 403, and that is recorded as a caveat rather than failing the lead. Expect 60-85% of sites to be readable. |
+| Skip Fetch (No Website) | No Op |  | - |  |
+| Extract Evidence, Score, Recommend | Code | inlines `lib/normalize.js`, `lib/dedupe.js` | - | The scoring, signal and Instagram-confidence rules are the inlined lib/v1 source, so they match the 40 tests that cover them. |
+| Write A Message? | IF |  | - | In-niche, BEST or GOOD, and a recommended offer. Everything else gets a stated reason instead of a message. |
+| Render Message Prompt | Code | inlines `lib/prompts.js` | - | Rendering throws if a required variable is missing, so a half-filled prompt is never sent to the model. |
+| Claude: Write The Message | HTTP Request | Claude (Messages API) | retry x3, error output | Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item. |
+| Parse Message | Code | inlines `lib/validate.js`, `lib/json.js` | - |  |
+| Record Why No Message | Code | inline logic | - | A skipped lead still reaches the sheet, with the reason. Nothing disappears silently. |
+| Shape Row For The Sheet | Code | inline logic | - |  |
+| Append To Review Sheet | n8n-nodes-base.googleSheets |  | continues on fail | Add a Google Sheets OAuth credential named "Google Sheets (OptiFlow)" and put the spreadsheet id in GOOGLE_SHEETS_SPREADSHEET_ID. The sheet's first row must hold the column names - run once and paste the header from the CSV if the sheet is empty. Disable this node to use the CSV download instead. |
+| Build CSV Download | n8n-nodes-base.convertToFile |  | - | The same rows as a CSV, in case you would rather not connect Google Sheets. |
+| Run Summary | Code | inline logic | - |  |
+| How To Use This | n8n-nodes-base.stickyNote |  | - |  |
+
+**Connections**
+
+```
+Upload Lead File -> Detect File Type
+Run Manually -> Detect File Type
+Detect File Type -> Spreadsheet Or CSV
+Spreadsheet Or CSV (output 0) -> Read Spreadsheet
+Spreadsheet Or CSV (output 1) -> Read CSV
+Read Spreadsheet -> Clean, Deduplicate, Check Niche
+Read CSV -> Clean, Deduplicate, Check Niche
+Clean, Deduplicate, Check Niche -> Any Leads To Process?
+Any Leads To Process? (output 0) -> For Each Lead
+Any Leads To Process? (output 1) -> Nothing To Process
+For Each Lead (output 0) -> Run Summary
+For Each Lead (output 1) -> Build Page URLs
+Build Page URLs -> Has A Website?
+Has A Website? (output 0) -> Fetch Page
+Has A Website? (output 1) -> Skip Fetch (No Website)
+Fetch Page -> Extract Evidence, Score, Recommend
+Skip Fetch (No Website) -> Extract Evidence, Score, Recommend
+Extract Evidence, Score, Recommend -> Write A Message?
+Write A Message? (output 0) -> Render Message Prompt
+Write A Message? (output 1) -> Record Why No Message
+Render Message Prompt -> Claude: Write The Message
+Claude: Write The Message (output 0) -> Parse Message
+Claude: Write The Message (output 1, error) -> Record Why No Message
+Parse Message -> Shape Row For The Sheet
+Record Why No Message -> Shape Row For The Sheet
+Shape Row For The Sheet -> For Each Lead
+Run Summary -> Append To Review Sheet
+Run Summary -> Build CSV Download
+```

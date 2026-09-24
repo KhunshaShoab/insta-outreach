@@ -16,7 +16,8 @@ const VALID_NODE_TYPES = new Set([
   'n8n-nodes-base.executeWorkflowTrigger', 'n8n-nodes-base.executeWorkflow', 'n8n-nodes-base.httpRequest',
   'n8n-nodes-base.code', 'n8n-nodes-base.if', 'n8n-nodes-base.switch', 'n8n-nodes-base.splitInBatches',
   'n8n-nodes-base.merge', 'n8n-nodes-base.noOp', 'n8n-nodes-base.set', 'n8n-nodes-base.respondToWebhook',
-  'n8n-nodes-base.stickyNote'
+  'n8n-nodes-base.stickyNote', 'n8n-nodes-base.formTrigger', 'n8n-nodes-base.extractFromFile',
+  'n8n-nodes-base.googleSheets', 'n8n-nodes-base.convertToFile'
 ]);
 
 /** Structural checks that catch the mistakes hand-written workflow JSON makes. */
@@ -65,7 +66,7 @@ export function validateWorkflow(wf) {
     }
   }
 
-  const triggerTypes = ['scheduleTrigger', 'manualTrigger', 'webhook', 'executeWorkflowTrigger'];
+  const triggerTypes = ['scheduleTrigger', 'manualTrigger', 'webhook', 'executeWorkflowTrigger', 'formTrigger'];
   const hasTrigger = (wf.nodes ?? []).some((n) => triggerTypes.some((t) => n.type.endsWith(t)));
   if (!hasTrigger) errors.push(`${wf.name}: no trigger node`);
 

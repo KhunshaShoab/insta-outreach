@@ -308,3 +308,58 @@ export const sticky = (name, content, { column = 0, row = 0, width = 420, height
   parameters: { content, height, width, color: 4 },
   _sticky: { column, row }
 });
+
+// --- nodes for the V1 file-upload pipeline ---------------------------------
+
+/** A hosted upload form. The operator opens a URL and drags the lead file in. */
+export const formTrigger = (name, { title, description, fields = [], notes = null }) => ({
+  name,
+  type: 'n8n-nodes-base.formTrigger',
+  typeVersion: 2.2,
+  notes,
+  parameters: {
+    formTitle: title,
+    formDescription: description,
+    formFields: { values: fields },
+    options: {}
+  }
+});
+
+/** Read rows out of an uploaded spreadsheet. */
+export const extractFromFile = (name, { operation = 'xlsx', binaryProperty = 'data', notes = null }) => ({
+  name,
+  type: 'n8n-nodes-base.extractFromFile',
+  typeVersion: 1,
+  notes,
+  parameters: { operation, binaryPropertyName: binaryProperty, options: { headerRow: true } }
+});
+
+/** Append rows to a Google Sheet - the review surface. */
+export const googleSheets = (name, { documentId, sheetName, columns = [], notes = null }) => ({
+  name,
+  type: 'n8n-nodes-base.googleSheets',
+  typeVersion: 4.5,
+  continueOnFail: true,
+  notes,
+  parameters: {
+    operation: 'append',
+    documentId: { __rl: true, value: documentId, mode: 'id' },
+    sheetName: { __rl: true, value: sheetName, mode: 'name' },
+    columns: {
+      mappingMode: 'autoMapInputData',
+      matchingColumns: [],
+      schema: columns.map((c) => ({ id: c, displayName: c, type: 'string', required: false, display: true, defaultMatch: false }))
+    },
+    options: { useAppend: true }
+  },
+  credentials: { googleSheetsOAuth2Api: { id: 'google-sheets-optiflow', name: 'Google Sheets (OptiFlow)' } }
+});
+
+/** Turn the result rows into a downloadable CSV. */
+export const convertToFile = (name, { fileName = 'leads.csv', notes = null } = {}) => ({
+  name,
+  type: 'n8n-nodes-base.convertToFile',
+  typeVersion: 1.1,
+  notes,
+  parameters: { operation: 'csv', options: { fileName, headerRow: true } }
+});
