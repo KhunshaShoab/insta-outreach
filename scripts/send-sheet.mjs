@@ -15,7 +15,9 @@ import { csvCell } from '../lib/v1/format.js';
 const COLUMNS = [
   ['sent', () => ''],
   ['instagram_url', (l) => (l.business_instagram ? `https://instagram.com/${l.business_instagram}` : '')],
-  ['handle', (l) => (l.business_instagram ? `@${l.business_instagram}` : 'NOT FOUND - find it or skip')],
+  // No leading "@": a cell starting with it is a formula to Excel and Sheets, so
+  // the CSV writer escapes it and a stray apostrophe shows up in the column.
+  ['handle', (l) => l.business_instagram || 'NOT FOUND - find it or skip'],
   ['company_name', (l) => l.company_name],
   ['city_state', (l) => [l.city, l.state].filter(Boolean).join(', ')],
   ['score', (l) => l.overall_score],
