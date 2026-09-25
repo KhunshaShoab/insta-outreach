@@ -551,7 +551,10 @@ test('after-hours coverage is not read from aftercare or recovery text', () => {
     'Avoid strenuous activity, steam rooms and saunas, and other facial treatments for at least 24 hours.',
     'Patients can typically return to their everyday schedule in only 24 hours after a session.',
     'Most swelling settles within 24 hours and results appear over 4-10 days.',
-    'Access your financing portal online 24/7 to review your payment plan.'
+    'Access your financing portal online 24/7 to review your payment plan.',
+    'To accommodate all of our clients, please provide at least 24 hours notice to cancel.',
+    'We will contact you within the next 24 hours if you call us or fill out the form.',
+    'Book Online 24/7 with our self-service booking.'
   ];
   for (const text of quiet) {
     assert.equal(page(text).after_hours.mentioned, false, `fired on: ${text}`);
