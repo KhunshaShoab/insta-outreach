@@ -12,6 +12,7 @@ import { scoreLead } from '../lib/v1/score.js';
 import { recommendOffer } from '../lib/v1/offer.js';
 import { discoverInstagram } from '../lib/v1/instagram.js';
 import { checkRelevance, detectNiche } from '../lib/v1/relevance.js';
+import { extractEvidence } from '../lib/v1/research.js';
 import { writeCsv, formatSignals } from '../lib/v1/output.js';
 import { classify } from '../lib/v1/schema.js';
 import { ROOT } from './fixtures.mjs';
@@ -533,4 +534,39 @@ test('the company location wins over the contact location', async () => {
   assert.equal(lead.city, 'Calgary');
   assert.equal(lead.state, 'Alberta');
   assert.equal(lead.contact_city, 'London', 'the contact location is kept, not discarded');
+});
+
+// --- after-hours detection -------------------------------------------------
+// A medspa's aftercare page is full of "24 hours", and the coverage verbs had no
+// word boundaries, so "steam rooms" matched `team` and "typically" matched
+// `call`. Treatment recovery text was being read as advertised phone coverage,
+// which lifted the AI voice score on leads that advertise no such thing.
+const page = (text) => extractEvidence(
+  [{ url: 'https://example.com/', label: 'homepage', ok: true, status: 200, html: `<html><body><p>${text}</p></body></html>` }],
+  { domain: 'example.com' }
+);
+
+test('after-hours coverage is not read from aftercare or recovery text', () => {
+  const quiet = [
+    'Avoid strenuous activity, steam rooms and saunas, and other facial treatments for at least 24 hours.',
+    'Patients can typically return to their everyday schedule in only 24 hours after a session.',
+    'Most swelling settles within 24 hours and results appear over 4-10 days.',
+    'Access your financing portal online 24/7 to review your payment plan.'
+  ];
+  for (const text of quiet) {
+    assert.equal(page(text).after_hours.mentioned, false, `fired on: ${text}`);
+  }
+});
+
+test('genuinely advertised after-hours coverage still registers', () => {
+  const fires = [
+    'Our team answers calls 24/7, so you always reach a person.',
+    'We run an after-hours answering service for urgent questions.',
+    'Monday to Friday 9:00 AM - 5:00 PM. Saturday and Sunday: Open 24 hours.'
+  ];
+  for (const text of fires) {
+    const evidence = page(text);
+    assert.equal(evidence.after_hours.mentioned, true, `missed: ${text}`);
+    assert.ok(evidence.after_hours.examples[0], 'no example quoted');
+  }
 });

@@ -628,7 +628,7 @@ Store Run Record -> Respond
 
 Upload a lead file: clean, deduplicate, find Instagram, score, classify and draft a message for each business. Nothing is sent.
 
-**25 nodes.** Import from `n8n/workflows/wf14-v1-lead-intelligence.json`.
+**26 nodes.** Import from `n8n/workflows/wf14-v1-lead-intelligence.json`.
 
 | Node | Type | Talks to | Reliability | Why it is there |
 | --- | --- | --- | --- | --- |
@@ -651,6 +651,7 @@ Upload a lead file: clean, deduplicate, find Instagram, score, classify and draf
 | Render Message Prompt | Code | inlines `lib/prompts.js` | - | Rendering throws if a required variable is missing, so a half-filled prompt is never sent to the model. |
 | Claude: Write The Message | HTTP Request | Claude (Messages API) | retry x3, error output | Node-level retries cover 429 and 5xx. A malformed or schema-invalid response is handled by the parser node, which sends one correction turn before failing the item. |
 | Parse Message | Code | inlines `lib/validate.js`, `lib/json.js` | - |  |
+| Compose Message In Code | Code | inline logic | - | A qualified lead never reaches the sheet with an empty message because a model call failed. |
 | Record Why No Message | Code | inline logic | - | A skipped lead still reaches the sheet, with the reason. Nothing disappears silently. |
 | Shape Row For The Sheet | Code | inline logic | - |  |
 | Append To Review Sheet | n8n-nodes-base.googleSheets |  | continues on fail | Add a Google Sheets OAuth credential named "Google Sheets (OptiFlow)" and put the spreadsheet id in GOOGLE_SHEETS_SPREADSHEET_ID. The sheet's first row must hold the column names - run once and paste the header from the CSV if the sheet is empty. Disable this node to use the CSV download instead. |
@@ -683,9 +684,10 @@ Write A Message? (output 0) -> Render Message Prompt
 Write A Message? (output 1) -> Record Why No Message
 Render Message Prompt -> Claude: Write The Message
 Claude: Write The Message (output 0) -> Parse Message
-Claude: Write The Message (output 1, error) -> Record Why No Message
+Claude: Write The Message (output 1, error) -> Compose Message In Code
 Parse Message -> Shape Row For The Sheet
 Record Why No Message -> Shape Row For The Sheet
+Compose Message In Code -> Shape Row For The Sheet
 Shape Row For The Sheet -> For Each Lead
 Run Summary -> Append To Review Sheet
 Run Summary -> Build CSV Download

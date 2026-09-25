@@ -21,10 +21,9 @@ import { scoreLead } from '../lib/v1/score.js';
 import { recommendOffer } from '../lib/v1/offer.js';
 import { detectNiche, checkRelevance, checkExclusion, NICHE_RULES } from '../lib/v1/relevance.js';
 import { writeCsv, writeJson, reviewTable, formatSignals } from '../lib/v1/output.js';
+import { composeDm } from '../lib/v1/compose-dm.js';
 import { parseFrontMatter, renderPrompt } from '../lib/prompts.js';
-import { parseAiJson } from '../lib/json.js';
 import { create as createAnthropic } from '../lib/providers/ai.anthropic.js';
-import { create as createMockAi } from '../lib/providers/ai.mock.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const readJson = (p) => JSON.parse(readFileSync(join(ROOT, p), 'utf8'));
@@ -88,15 +87,17 @@ async function main() {
   const dmPrompt = parseFrontMatter(readFileSync(join(ROOT, 'prompts/v1-instagram-dm.md'), 'utf8'));
 
   const useRealAi = Boolean(process.env.ANTHROPIC_API_KEY) && !flag('mock-ai');
+  // Without a key the composer writes the messages instead, so no mock provider
+  // is needed - `ai` is only ever reached on the real path.
   const ai = useRealAi
     ? createAnthropic(process.env, { models: { default: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5', heavy: process.env.ANTHROPIC_MODEL_HEAVY ?? 'claude-opus-5' } })
-    : createMockAi({}, {});
+    : null;
 
   console.log(`\nOptiFlow Lead Intelligence Engine - V1`);
   console.log('='.repeat(78));
   console.log(`Input     ${basename(file)}${sheet ? ` (sheet "${sheet}")` : ''}`);
   console.log(`Batch     ${limit} lead(s)${offset ? `, skipping the first ${offset}` : ''}`);
-  console.log(`DM writer ${useRealAi ? `Claude (${process.env.ANTHROPIC_MODEL_HEAVY ?? 'claude-opus-5'})` : 'MOCK - no ANTHROPIC_API_KEY set, so DM text is placeholder'}`);
+  console.log(`DM writer ${useRealAi ? `Claude (${process.env.ANTHROPIC_MODEL_HEAVY ?? 'claude-opus-5'})` : 'template composer - no ANTHROPIC_API_KEY set, so messages are built in code from each lead\'s evidence'}`);
 
   // --- 1. ingest -----------------------------------------------------------
   const ingested = ingestFile(file, { sheet });
@@ -132,7 +133,7 @@ async function main() {
   console.log(`[4/9] Batch         ${batch.length} lead(s) selected (in niche, then website, then review volume)`);
 
   // --- 4-7. research, Instagram, signals, score, offer ---------------------
-  const concurrency = Number(config.research?.concurrency ?? 4);
+  const concurrency = Number(arg('concurrency', config.research?.concurrency ?? 4));
   const records = [];
   let done = 0;
 
@@ -165,12 +166,32 @@ async function main() {
   }
 
   console.log(`[5/9] Research      reading websites, ${concurrency} at a time`);
-  for (let i = 0; i < batch.length; i += concurrency) {
-    const slice = batch.slice(i, i + concurrency);
-    const results = await Promise.all(slice.map((lead, j) => processLead(lead, i + j)));
-    records.push(...results);
-  }
+  // A pool rather than lockstep slices: on a long run one site that sits out its
+  // full timeout would otherwise stall every other lead in its slice.
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, async () => {
+    for (let i = next++; i < batch.length; i = next++) {
+      try {
+        records.push(await processLead(batch[i], i));
+      } catch (error) {
+        // One unreadable lead must not end the run: keep the row, say why.
+        done += 1;
+        records.push({
+          lead_id: `${batch[i].source_file}:${batch[i].original_row}`,
+          ...batch[i],
+          overall_score: 0, customer_support_score: 0, ai_voice_score: 0,
+          classification: 'REVIEW', instagram_confidence: 'NOT_FOUND',
+          recommended_offer: 'NONE', signals: [], opportunity_signals: '',
+          research_summary: `Processing failed: ${error.message.slice(0, 200)}`,
+          evidence_sources: [], evidence: { website_reachable: false },
+          review_status: config.review?.default_status ?? 'PENDING',
+          duplicate_of: '', related_locations: '', _index: i
+        });
+      }
+    }
+  }));
   process.stdout.write('\n');
+  records.sort((a, b) => a._index - b._index);
   const reachable = records.filter((r) => r.evidence.website_reachable).length;
   const igFound = records.filter((r) => r.business_instagram).length;
   console.log(`      ${reachable}/${records.length} websites readable, ${igFound} Instagram account(s) identified`);
@@ -207,6 +228,25 @@ async function main() {
     }
     const service = config.services[record.recommended_offer === 'BOTH' ? 'AI_VOICE' : record.recommended_offer]
       ?? config.services.AI_VOICE;
+
+    // No API key means no Claude. Composing the message in code from the same
+    // signals beats shipping a placeholder, and it is honest about what wrote it.
+    if (!useRealAi) {
+      const composed = composeDm(record, {
+        sender: { name: config.outreach?.sender_name ?? 'Alex', company: config.outreach?.sender_company ?? 'OptiFlow Solutions' },
+        maxChars: config.outreach?.max_chars ?? 500
+      });
+      record.personalized_instagram_dm = composed.personalized_instagram_dm;
+      record.dm_observation_used = composed.observation_used;
+      record.dm_capability = composed.capability_mentioned;
+      record.dm_self_check = composed.self_check;
+      record.dm_written_by = 'template';
+      record.pipeline_notes = `${composed.why_this_message} Composed in code (lib/v1/compose-dm.js) under the rules in prompts/v1-instagram-dm.md, because no ANTHROPIC_API_KEY is set in the run environment - edit freely before sending.`;
+      const failedChecks = Object.entries(composed.self_check).filter(([, v]) => v === false).map(([k]) => k);
+      if (failedChecks.length) record.pipeline_notes += ` FLAGGED: ${failedChecks.join(', ')} - read this one carefully.`;
+      continue;
+    }
+
     try {
       const rendered = renderPrompt(dmPrompt, {
         lead: record,
@@ -227,16 +267,8 @@ async function main() {
         maxTokens: rendered.max_tokens,
         temperature: rendered.temperature
       });
-      const parsed = useRealAi
-        ? { ok: true, data: response.data }
-        : parseAiJson(JSON.stringify({
-            personalized_instagram_dm: `[MOCK - no API key] Would open with: "${record.signals[0]?.evidence?.slice(0, 90) ?? 'no evidence'}" and offer ${service.label}.`,
-            char_count: 0,
-            observation_used: record.signals[0]?.evidence ?? null,
-            capability_mentioned: service.label,
-            why_this_message: `Mock output. With an API key this is written by Claude from the ${record.signals.filter((s) => s.confidence !== 'LOW').length} non-low-confidence signal(s).`,
-            self_check: { opens_with_verified_observation: true, no_invented_facts: true, no_assumed_pain: true, one_capability_only: true, ends_with_question: true, under_max_chars: true }
-          }), null);
+      const parsed = { ok: true, data: response.data };
+      record.dm_written_by = 'claude';
 
       record.personalized_instagram_dm = parsed.data.personalized_instagram_dm ?? '';
       record.dm_observation_used = parsed.data.observation_used ?? null;
@@ -268,7 +300,7 @@ async function main() {
       merged: duplicates.length,
       batch_size: batch.length,
       niche: detected,
-      dm_writer: useRealAi ? 'claude' : 'mock',
+      dm_writer: useRealAi ? 'claude' : 'template',
       config: { bands: config.bands, offer_thresholds: config.offer_thresholds, score_caps: config.score_caps }
     },
     leads: ordered.map(({ evidence, signals, original_record, ...rest }) => ({ ...rest, signals, evidence, original_record })),
@@ -283,11 +315,100 @@ async function main() {
   console.log(`\nAll rows are review_status=PENDING. Nothing has been sent, and this`);
   console.log(`pipeline has no way to send anything.\n`);
   if (!useRealAi) {
-    console.log(`DM text is placeholder: set ANTHROPIC_API_KEY and re-run to have Claude`);
-    console.log(`write the messages from the evidence above.\n`);
+    console.log(`Messages were composed in code from each lead's evidence, because no`);
+    console.log(`ANTHROPIC_API_KEY is set. To have Claude rewrite them without re-reading`);
+    console.log(`any website: ANTHROPIC_API_KEY=... node scripts/v1.mjs --recompose ${outBase}.json\n`);
   }
 }
 
+/**
+ * Rewrite the messages in a finished run from its saved evidence.
+ *
+ * Research is the expensive half - 2,000-odd page fetches for a full list - and
+ * the evidence it produced is already in the JSON. This regenerates only the
+ * message column, so adding an API key later costs nothing but the model calls.
+ */
+async function recompose(jsonPath) {
+  const config = readJson('config/v1.json');
+  const saved = JSON.parse(readFileSync(jsonPath, 'utf8'));
+  const dmPrompt = parseFrontMatter(readFileSync(join(ROOT, 'prompts/v1-instagram-dm.md'), 'utf8'));
+  const useRealAi = Boolean(process.env.ANTHROPIC_API_KEY) && !flag('mock-ai');
+  const ai = useRealAi
+    ? createAnthropic(process.env, { models: { default: process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5', heavy: process.env.ANTHROPIC_MODEL_HEAVY ?? 'claude-opus-5' } })
+    : null;
+  const sender = { name: config.outreach?.sender_name ?? 'Alex', company: config.outreach?.sender_company ?? 'OptiFlow Solutions' };
+  const maxChars = config.outreach?.max_chars ?? 500;
+
+  const wantsDm = (r) =>
+    !r.excluded &&
+    r.niche_match === 'IN_NICHE' &&
+    (config.research?.generate_dm_for_classifications ?? ['BEST', 'GOOD']).includes(r.classification) &&
+    (config.research?.generate_dm_for_offers ?? ['CUSTOMER_SUPPORT', 'AI_VOICE', 'BOTH']).includes(r.recommended_offer);
+
+  const targets = saved.leads.filter(wantsDm);
+  console.log(`\nRecomposing ${targets.length} message(s) from ${basename(jsonPath)}`);
+  console.log(`Writer: ${useRealAi ? `Claude (${process.env.ANTHROPIC_MODEL_HEAVY ?? 'claude-opus-5'})` : 'template composer (no ANTHROPIC_API_KEY)'}\n`);
+
+  let n = 0;
+  for (const record of saved.leads) {
+    if (!wantsDm(record)) continue;
+    n += 1;
+    process.stdout.write(`\r  ${n}/${targets.length}`);
+    const service = config.services[record.recommended_offer === 'BOTH' ? 'AI_VOICE' : record.recommended_offer] ?? config.services.AI_VOICE;
+
+    if (!useRealAi) {
+      const composed = composeDm(record, { sender, maxChars });
+      record.personalized_instagram_dm = composed.personalized_instagram_dm;
+      record.dm_observation_used = composed.observation_used;
+      record.dm_capability = composed.capability_mentioned;
+      record.dm_self_check = composed.self_check;
+      record.dm_written_by = 'template';
+      record.pipeline_notes = `${composed.why_this_message} Composed in code (lib/v1/compose-dm.js) under the rules in prompts/v1-instagram-dm.md, because no ANTHROPIC_API_KEY is set in the run environment - edit freely before sending.`;
+      const failed = Object.entries(composed.self_check).filter(([, v]) => v === false).map(([k]) => k);
+      if (failed.length) record.pipeline_notes += ` FLAGGED: ${failed.join(', ')} - read this one carefully.`;
+      continue;
+    }
+
+    try {
+      const rendered = renderPrompt(dmPrompt, {
+        lead: record,
+        instagram: { business_instagram: record.business_instagram, owner_first_name: record.owner_name ? String(record.owner_name).split(' ')[0] : null },
+        signals: (record.signals ?? []).filter((s) => s.confidence !== 'LOW').slice(0, 6),
+        research_summary: record.research_summary,
+        offer: { ...record, capability_line: service.capability_line },
+        constraints: { max_chars: maxChars },
+        sender
+      });
+      const response = await ai.complete({ prompt: rendered.prompt, model: 'heavy', maxTokens: rendered.max_tokens, temperature: rendered.temperature });
+      record.personalized_instagram_dm = response.data.personalized_instagram_dm ?? '';
+      record.dm_observation_used = response.data.observation_used ?? null;
+      record.dm_capability = response.data.capability_mentioned ?? null;
+      record.dm_self_check = response.data.self_check ?? {};
+      record.dm_written_by = 'claude';
+      record.pipeline_notes = response.data.why_this_message ?? '';
+      const failed = Object.entries(record.dm_self_check).filter(([, v]) => v === false).map(([k]) => k);
+      if (failed.length) record.pipeline_notes += ` FLAGGED: the writer's own checks failed (${failed.join(', ')}) - read this one carefully.`;
+    } catch (error) {
+      // Fall back rather than leave the row empty; the note says which wrote it.
+      const composed = composeDm(record, { sender, maxChars });
+      record.personalized_instagram_dm = composed.personalized_instagram_dm;
+      record.dm_self_check = composed.self_check;
+      record.dm_written_by = 'template';
+      record.pipeline_notes = `Claude call failed (${error.message.slice(0, 120)}), so this was composed in code from the same evidence. ${composed.why_this_message}`;
+    }
+  }
+  process.stdout.write('\n');
+
+  saved.run.dm_writer = useRealAi ? 'claude' : 'template';
+  saved.run.recomposed_at = new Date().toISOString();
+  writeJson(jsonPath, saved);
+  const csvPath = jsonPath.replace(/\.json$/, '.csv');
+  writeCsv(csvPath, saved.leads);
+  console.log(`\nRewrote:\n  ${csvPath}\n  ${jsonPath}\n`);
+}
+
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop())) {
-  await main();
+  const recomposeTarget = arg('recompose');
+  if (recomposeTarget) await recompose(recomposeTarget);
+  else await main();
 }

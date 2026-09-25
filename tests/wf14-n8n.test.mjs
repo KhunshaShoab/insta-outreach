@@ -74,8 +74,10 @@ test('every lead reaches the output sheet, including the skipped ones', () => {
   const connections = WORKFLOW.connections;
   assert.equal(connections['Parse Message'].main[0][0].node, 'Shape Row For The Sheet');
   assert.equal(connections['Record Why No Message'].main[0][0].node, 'Shape Row For The Sheet');
-  // And a Claude failure routes to the same place rather than dropping the lead.
-  assert.equal(connections['Claude: Write The Message'].main[1][0].node, 'Record Why No Message');
+  // A Claude failure is not the same as a lead that did not qualify: the lead
+  // earned a message, so it is composed in code and still reaches the sheet.
+  assert.equal(connections['Claude: Write The Message'].main[1][0].node, 'Compose Message In Code');
+  assert.equal(connections['Compose Message In Code'].main[0][0].node, 'Shape Row For The Sheet');
 });
 
 test('Detect File Type reads the extension and rejects anything else', async () => {
@@ -240,13 +242,34 @@ test('the prompt renders with the real evidence and no unfilled placeholders', a
   assert.ok(out[0].json.model);
 });
 
-test('a malformed model reply produces a stated reason, never a fake message', async () => {
-  const lead = { company_name: 'X', prompt: 'p' };
+test('a malformed model reply is never passed off as the model\'s own work', async () => {
+  // The reply is unusable, so the lead's own evidence is composed instead - and
+  // the note has to say that, or a reviewer would credit Claude with the text.
+  const lead = {
+    company_name: 'X', prompt: 'p', recommended_offer: 'AI_VOICE',
+    signals: [{ signal: 'Appointment booking in use', evidence: 'Booking platform detected: Boulevard.', interpretation: 'i', confidence: 'HIGH', source: 'https://x.test' }]
+  };
   const out = await runCodeNode('Parse Message',
     [{ json: { content: [{ type: 'text', text: 'Sure! Here is a lovely message for you.' }] } }],
     { 'Render Message Prompt': [{ json: lead }] });
-  assert.equal(out[0].json.personalized_instagram_dm, '');
-  assert.match(out[0].json.pipeline_notes, /could not be generated in a valid form/);
+  assert.match(out[0].json.pipeline_notes, /did not validate/);
+  assert.match(out[0].json.pipeline_notes, /composed in code/);
+  assert.equal(out[0].json.dm_written_by, 'template');
+  assert.match(out[0].json.personalized_instagram_dm, /Boulevard/);
+  assert.ok(out[0].json.personalized_instagram_dm.endsWith('?'));
+  // Nothing from the unusable reply may survive into the message.
+  assert.ok(!out[0].json.personalized_instagram_dm.includes('lovely message'));
+});
+
+test('a lead whose Claude call fails outright still gets a message composed', async () => {
+  const lead = {
+    company_name: 'Glow Medspa', recommended_offer: 'AI_VOICE',
+    signals: [{ signal: 'Phone is a prominent contact channel', evidence: '7 click-to-call links across the 2 page(s) read.', interpretation: 'i', confidence: 'HIGH', source: 'https://x.test' }]
+  };
+  const out = await runCodeNode('Compose Message In Code', [{ json: {} }], { 'Render Message Prompt': [{ json: lead }] });
+  assert.match(out[0].json.personalized_instagram_dm, /7/);
+  assert.equal(out[0].json.dm_written_by, 'template');
+  assert.match(out[0].json.pipeline_notes, /Claude call did not complete/);
 });
 
 test('a valid model reply is carried through, and failed self-checks are flagged', async () => {
@@ -260,6 +283,7 @@ test('a valid model reply is carried through, and failed self-checks are flagged
     [{ json: { content: [{ type: 'text', text: JSON.stringify(good) }] } }],
     { 'Render Message Prompt': [{ json: { company_name: 'X' } }] });
   assert.match(ok[0].json.personalized_instagram_dm, /click-to-call/);
+  assert.equal(ok[0].json.dm_written_by, 'claude');
   assert.ok(!ok[0].json.pipeline_notes.includes('FLAGGED'));
 
   const flagged = await runCodeNode('Parse Message',

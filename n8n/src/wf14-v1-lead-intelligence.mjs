@@ -286,7 +286,7 @@ return [{ json: { ...lead, prompt: rendered.prompt, model: $env.ANTHROPIC_MODEL_
 
   const claude = wf.add(anthropic('Claude: Write The Message'), { column: 13, row: 0 });
 
-  const parseDm = wf.add(code('Parse Message', withLib(['lib/json.js'], `
+  const parseDm = wf.add(code('Parse Message', withLib(['lib/json.js', 'lib/v1/compose-dm.js'], `
 ${schemaConst('v1-dm.schema.json', 'DM_SCHEMA')}
 
 const lead = $('Render Message Prompt').first().json;
@@ -295,11 +295,17 @@ const text = (response.content || []).filter((b) => b.type === 'text').map((b) =
 const parsed = parseAiJson(text, DM_SCHEMA, { label: 'v1 dm' });
 
 if (!parsed.ok) {
-  // A message that cannot be validated is not shown as if it were fine.
+  // A message that cannot be validated is not shown as if it were fine - but an
+  // empty cell on a qualified lead is worse, so it is composed from the same
+  // evidence in code, and the note says which wrote it.
+  const composed = composeDm(lead, { sender: { name: $env.OPTIFLOW_SENDER_NAME || 'Alex', company: 'OptiFlow Solutions' } });
   return [{ json: {
     ...lead,
-    personalized_instagram_dm: '',
-    pipeline_notes: 'The message could not be generated in a valid form (' + parsed.errors.slice(0, 2).join('; ') + '). Write this one by hand, or re-run the lead.'
+    personalized_instagram_dm: composed.personalized_instagram_dm,
+    dm_observation_used: composed.observation_used,
+    dm_capability: composed.capability_mentioned,
+    dm_written_by: 'template',
+    pipeline_notes: 'Claude returned a message that did not validate (' + parsed.errors.slice(0, 2).join('; ') + '), so this was composed in code from the same evidence. ' + composed.why_this_message
   } }];
 }
 
@@ -311,10 +317,29 @@ return [{ json: {
   personalized_instagram_dm: data.personalized_instagram_dm ?? '',
   dm_observation_used: data.observation_used ?? null,
   dm_capability: data.capability_mentioned ?? null,
+  dm_written_by: 'claude',
   pipeline_notes: (data.why_this_message ?? '') +
     (failedChecks.length ? ' FLAGGED: the writer\\'s own checks failed (' + failedChecks.join(', ') + ') - read this one carefully before sending.' : '')
 } }];
 `)), { column: 14, row: 0 });
+
+  const composeFallback = wf.add(code('Compose Message In Code', withLib(['lib/v1/compose-dm.js'], `
+// The Claude node's error output lands here: a rate limit, a timeout, a missing
+// credential. The lead qualified, so it gets a message composed from its own
+// signals under the same rules, rather than an empty cell and a shrug.
+const lead = $('Render Message Prompt').first().json;
+const composed = composeDm(lead, { sender: { name: $env.OPTIFLOW_SENDER_NAME || 'Alex', company: 'OptiFlow Solutions' } });
+const failed = Object.entries(composed.self_check).filter(([, v]) => v === false).map(([k]) => k);
+return [{ json: {
+  ...lead,
+  personalized_instagram_dm: composed.personalized_instagram_dm,
+  dm_observation_used: composed.observation_used,
+  dm_capability: composed.capability_mentioned,
+  dm_written_by: 'template',
+  pipeline_notes: 'The Claude call did not complete, so this was composed in code from the same evidence. ' + composed.why_this_message +
+    (failed.length ? ' FLAGGED: ' + failed.join(', ') + ' - read this one carefully.' : '')
+} }];
+`), { notes: 'A qualified lead never reaches the sheet with an empty message because a model call failed.' }), { column: 14, row: 1 });
 
   const noMessage = wf.add(code('Record Why No Message', `
 const lead = $input.first().json;
@@ -413,7 +438,8 @@ return [{ json: {
   wf.connect(parseDm, collect);
   wf.connect(noMessage, collect);
   // A model failure must not lose the lead: it still reaches the sheet.
-  wf.connect([claude, 1], noMessage);
+  wf.connect([claude, 1], composeFallback);
+  wf.chain(composeFallback, collect);
   wf.connect(collect, loop);              // next lead
 
   wf.connect([loop, 0], summary);         // loop finished
